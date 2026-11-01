@@ -39,7 +39,7 @@ function App() {
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false)
   const [audioLevel, setAudioLevel] = useState(0)
   const [audioSource, setAudioSource] = useState('SYSTEM')
-  const [isClickThrough, setIsClickThrough] = useState(false)
+  const [isClickThrough, setIsClickThrough] = useState(true)
   const transcriptEndRef = useRef(null)
   const nativeAudioCleanupRef = useRef(null)
 

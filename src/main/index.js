@@ -374,8 +374,8 @@ ipcMain.on('start-meeting', async (_event, data) => {
 
   // Lock click-through on start
   if (mainWindow) {
-    // Keep the HUD interactive so its controls and answer actions can be clicked.
-    mainWindow.setIgnoreMouseEvents(false)
+    // Keep the HUD click-through by default; hovering the top bar enables controls.
+    mainWindow.setIgnoreMouseEvents(true, { forwardToDesktop: true })
     mainWindow.webContents.send('window-unlocked', false)
   }
 })
