@@ -42,7 +42,10 @@ function generateMeetingAnswer(questionText) {
   lastMeetingQuestion = questionText
   const startedAt = Date.now()
   const excerpts = findRelevantContext(questionText, { source: activeSourceFilter })
-  logRuntimeEvent('answer_requested', { localExcerptCount: excerpts.length, sourceFilter: activeSourceFilter })
+  logRuntimeEvent('answer_requested', {
+    localExcerptCount: excerpts.length,
+    sourceFilter: activeSourceFilter
+  })
   const searchMs = Date.now() - startedAt
   let firstTokenMs = null
   const sources = excerpts.map((excerpt) => excerpt.path)
@@ -51,44 +54,56 @@ function generateMeetingAnswer(questionText) {
     mainWindow.webContents.send('on-ai-answer-start', { status: 'Buscando na base local…' })
   }
 
-  generateMeetingHelp(questionText, excerpts, (answer, provider) => {
-    if (requestId !== answerRequestId || controller.signal.aborted) return
-    const totalMs = Date.now() - startedAt
-    const latency = { searchMs, firstTokenMs: firstTokenMs ?? totalMs, totalMs }
-    meetingDiagnostics.push({
-      timestamp: new Date().toISOString(),
-      question: questionText,
-      provider,
-      sources,
-      latency
-    })
-    logRuntimeEvent('answer_completed', { provider, totalMs, firstTokenMs: latency.firstTokenMs, sourceCount: sources.length })
-    console.log(`[AI Answer] [${provider}] using ${excerpts.length} local excerpt(s): ${answer}`)
-    if (mainWindow) {
-      mainWindow.webContents.send('on-ai-answer', {
-        answer,
+  generateMeetingHelp(
+    questionText,
+    excerpts,
+    (answer, provider) => {
+      if (requestId !== answerRequestId || controller.signal.aborted) return
+      const totalMs = Date.now() - startedAt
+      const latency = { searchMs, firstTokenMs: firstTokenMs ?? totalMs, totalMs }
+      meetingDiagnostics.push({
+        timestamp: new Date().toISOString(),
+        question: questionText,
         provider,
         sources,
         latency
       })
-    }
-  }, (delta, provider) => {
-    if (requestId !== answerRequestId || controller.signal.aborted) return
-    if (firstTokenMs === null) firstTokenMs = Date.now() - startedAt
-    if (mainWindow) {
-      mainWindow.webContents.send('on-ai-answer-delta', {
-        delta,
+      logRuntimeEvent('answer_completed', {
         provider,
-        sources,
-        latency: { searchMs, firstTokenMs },
-        status: 'Respondendo…'
+        totalMs,
+        firstTokenMs: latency.firstTokenMs,
+        sourceCount: sources.length
       })
+      console.log(`[AI Answer] [${provider}] using ${excerpts.length} local excerpt(s): ${answer}`)
+      if (mainWindow) {
+        mainWindow.webContents.send('on-ai-answer', {
+          answer,
+          provider,
+          sources,
+          latency
+        })
+      }
+    },
+    (delta, provider) => {
+      if (requestId !== answerRequestId || controller.signal.aborted) return
+      if (firstTokenMs === null) firstTokenMs = Date.now() - startedAt
+      if (mainWindow) {
+        mainWindow.webContents.send('on-ai-answer-delta', {
+          delta,
+          provider,
+          sources,
+          latency: { searchMs, firstTokenMs },
+          status: 'Respondendo…'
+        })
+      }
+    },
+    controller.signal,
+    (status) => {
+      if (requestId !== answerRequestId || controller.signal.aborted || !mainWindow) return
+      mainWindow.webContents.send('on-ai-answer-status', status)
+      logRuntimeEvent('provider_status', { status })
     }
-  }, controller.signal, (status) => {
-    if (requestId !== answerRequestId || controller.signal.aborted || !mainWindow) return
-    mainWindow.webContents.send('on-ai-answer-status', status)
-    logRuntimeEvent('provider_status', { status })
-  })
+  )
 }
 
 function createWindow() {
@@ -108,6 +123,8 @@ function createWindow() {
       sandbox: false
     }
   })
+
+  mainWindow.setContentProtection(true)
 
   // OCR screen grab hotkey (Ctrl+Shift+S)
   globalShortcut.register('CommandOrControl+Shift+S', async () => {
