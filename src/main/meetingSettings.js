@@ -7,6 +7,8 @@ const allowedFields = [
   'meetingContext',
   'projectPaths',
   'obsidianVaultPath',
+  'audioOutputDevice',
+  'transcriberModel',
   'language',
   'useOllama',
   'openaiModel'

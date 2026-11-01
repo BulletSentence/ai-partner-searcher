@@ -1,10 +1,10 @@
-import { app, shell, BrowserWindow, ipcMain, globalShortcut } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, globalShortcut, dialog } from 'electron'
 import { join } from 'path'
 import fs from 'fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { startAudioCapture } from './audioCapture'
-import { configureTranscriber, processAudioStream } from './transcriber'
+import { listAudioOutputs, startAudioCapture } from './audioCapture'
+import { configureTranscriber, listTranscriptionModels, processAudioStream } from './transcriber'
 import {
   configureAI,
   generateMeetingHelp,
@@ -170,6 +170,7 @@ function createWindow() {
 }
 
 let currentAudioSource = 'system'
+let currentAudioOutputDevice = ''
 let lastAudioLevelSentTime = 0
 
 function calculateAndSendAudioLevel(chunk) {
@@ -243,7 +244,7 @@ function switchAudioSource(source) {
           }, 650)
         }
       })
-    }, source)
+    }, source, currentAudioOutputDevice)
   }
 }
 
@@ -308,7 +309,8 @@ ipcMain.on('start-meeting', async (_event, data) => {
     console.log(`[Terminology] Loaded ${grammar.count} grammar term(s) from ${grammar.path}`)
   }
   currentMeetingData = meetingProfile
-  configureTranscriber(meetingProfile.language)
+  currentAudioOutputDevice = typeof data?.audioOutputDevice === 'string' ? data.audioOutputDevice : ''
+  configureTranscriber(meetingProfile.language, data?.transcriberModel)
 
   // Configure AI prompt instructions
 
@@ -335,6 +337,23 @@ ipcMain.on('start-meeting', async (_event, data) => {
 ipcMain.handle('prepare-knowledge-sources', async (_event, data) => {
   activeSourceFilter = 'all'
   return indexKnowledgeSources(data)
+})
+
+ipcMain.handle('get-audio-outputs', () => listAudioOutputs())
+ipcMain.handle('get-transcription-models', () => listTranscriptionModels())
+
+// Native folder pickers used by the initial setup form.
+ipcMain.handle('select-folders', async (_event, { multiple = false } = {}) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: multiple ? 'Selecione até 2 pastas de projeto' : 'Selecione a pasta do Obsidian',
+    properties: ['openDirectory', ...(multiple ? ['multiSelections'] : [])]
+  })
+
+  return {
+    canceled: result.canceled,
+    // The setup supports no project folder or at most two project folders.
+    filePaths: multiple ? result.filePaths.slice(0, 2) : result.filePaths.slice(0, 1)
+  }
 })
 
 // IPC: Toggle Audio Source

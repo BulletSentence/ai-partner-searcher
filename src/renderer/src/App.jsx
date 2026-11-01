@@ -10,6 +10,8 @@ function App() {
     meetingContext: '',
     projectPaths: '',
     obsidianVaultPath: '',
+    audioOutputDevice: '',
+    transcriberModel: '',
     language: 'pt-BR',
     useOllama: false,
     openaiModel: 'gpt-6-luna'
@@ -20,6 +22,8 @@ function App() {
   const [selectedSession, setSelectedSession] = useState(null)
   const [indexStatus, setIndexStatus] = useState(null)
   const [isPreparingSources, setIsPreparingSources] = useState(false)
+  const [audioOutputs, setAudioOutputs] = useState([])
+  const [transcriptionModels, setTranscriptionModels] = useState([])
 
   // HUD State
   const [transcription, setTranscription] = useState('')
@@ -60,6 +64,31 @@ function App() {
       .then(([profile, settings]) => setFormData((current) => ({ ...current, ...profile, ...settings })))
       .catch((err) => console.error('Error loading meeting settings:', err))
       .finally(() => setHasLoadedSettings(true))
+  }, [])
+
+  useEffect(() => {
+    window.api
+      .getTranscriptionModels()
+      .then((models) => {
+        const availableModels = Array.isArray(models) ? models : []
+        setTranscriptionModels(availableModels)
+        setFormData((current) => {
+          const selectedModelIsAvailable = availableModels.some(
+            (model) => model.id === current.transcriberModel
+          )
+          return selectedModelIsAvailable || availableModels.length !== 1
+            ? current
+            : { ...current, transcriberModel: availableModels[0].id }
+        })
+      })
+      .catch((err) => console.error('Error loading transcription models:', err))
+  }, [])
+
+  useEffect(() => {
+    window.api
+      .getAudioOutputs()
+      .then((outputs) => setAudioOutputs(Array.isArray(outputs) ? outputs : []))
+      .catch((err) => console.error('Error loading audio outputs:', err))
   }, [])
 
   useEffect(() => {
@@ -126,6 +155,7 @@ function App() {
   }, [transcriptionHistory, transcription])
 
   const handleStart = async () => {
+    if (!formData.transcriberModel || transcriptionModels.length === 0) return
     setIsPreparingSources(true)
     try {
       const status = await window.api.prepareKnowledgeSources(formData)
@@ -173,6 +203,28 @@ function App() {
     setManualQuestion('')
   }
 
+  const selectProjectFolders = async () => {
+    const result = await window.api.selectFolders(true)
+    if (!result?.canceled) {
+      setFormData((current) => ({ ...current, projectPaths: result.filePaths.join('\n') }))
+    }
+  }
+
+  const selectObsidianFolder = async () => {
+    const result = await window.api.selectFolders(false)
+    if (!result?.canceled) {
+      setFormData((current) => ({ ...current, obsidianVaultPath: result.filePaths[0] || '' }))
+    }
+  }
+
+  const clearProjectFolders = () => {
+    setFormData((current) => ({ ...current, projectPaths: '' }))
+  }
+
+  const clearObsidianFolder = () => {
+    setFormData((current) => ({ ...current, obsidianVaultPath: '' }))
+  }
+
   const inputStyle = {
     background: 'rgba(255, 255, 255, 0.04)',
     border: '1px solid rgba(255, 255, 255, 0.08)',
@@ -183,6 +235,16 @@ function App() {
     fontFamily: 'inherit',
     outline: 'none',
     transition: 'border-color 0.2s, background 0.2s'
+  }
+
+  const folderButtonStyle = {
+    ...inputStyle,
+    width: 'auto',
+    flex: '0 0 auto',
+    cursor: 'pointer',
+    color: '#22d3ee',
+    fontWeight: '600',
+    whiteSpace: 'nowrap'
   }
 
   if (!isSetupComplete) {
@@ -276,6 +338,57 @@ function App() {
             background: rgba(255, 255, 255, 0.2);
           }
         `}</style>
+
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            height: '30px',
+            margin: '-12px -18px 10px',
+            padding: '0 12px',
+            background: 'rgba(30, 41, 59, 0.98)',
+            borderBottom: '2px solid #22d3ee',
+            WebkitAppRegion: 'drag',
+            userSelect: 'none'
+          }}
+        >
+          <span style={{ fontSize: '0.72rem', color: '#22d3ee', fontWeight: '600' }}>
+            🛸 Copilot de reuniões com IA
+          </span>
+          <div style={{ display: 'flex', gap: '6px', WebkitAppRegion: 'no-drag' }}>
+            <button
+              type="button"
+              onClick={() => window.api.minimize()}
+              aria-label="Minimizar janela"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#cbd5e1',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                padding: '2px 6px'
+              }}
+            >
+              ─
+            </button>
+            <button
+              type="button"
+              onClick={() => window.api.close()}
+              aria-label="Fechar janela"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#f87171',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                padding: '2px 6px'
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
 
         {/* Drawer overlay for inspecting a past session */}
         {selectedSession && (
@@ -446,29 +559,109 @@ function App() {
                 <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
                   Projetos para consultar
                 </label>
-                <input
-                  type="text"
-                  value={formData.projectPaths}
-                  onChange={(e) => setFormData({ ...formData, projectPaths: e.target.value })}
-                  placeholder="/caminho/do/projeto (um por linha na Rajada 2)"
-                  style={inputStyle}
-                  onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
-                  onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
-                />
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    value={formData.projectPaths}
+                    readOnly
+                    placeholder="Nenhuma pasta selecionada (opcional)"
+                    title={formData.projectPaths || 'Nenhuma pasta selecionada'}
+                    style={{ ...inputStyle, flex: 1, cursor: 'default' }}
+                  />
+                  <button type="button" onClick={selectProjectFolders} style={folderButtonStyle}>
+                    Buscar pastas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearProjectFolders}
+                    disabled={!formData.projectPaths}
+                    style={{ ...folderButtonStyle, color: '#94a3b8', cursor: formData.projectPaths ? 'pointer' : 'default' }}
+                  >
+                    Limpar
+                  </button>
+                </div>
+                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                  Selecione 0, 1 ou 2 pastas de projeto.
+                </span>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
                   Vault do Obsidian
                 </label>
-                <input
-                  type="text"
-                  value={formData.obsidianVaultPath}
-                  onChange={(e) => setFormData({ ...formData, obsidianVaultPath: e.target.value })}
-                  placeholder="/caminho/para/ObsVaultCredifit"
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    value={formData.obsidianVaultPath}
+                    readOnly
+                    placeholder="Nenhuma pasta selecionada (opcional)"
+                    title={formData.obsidianVaultPath || 'Nenhuma pasta selecionada'}
+                    style={{ ...inputStyle, flex: 1, cursor: 'default' }}
+                  />
+                  <button type="button" onClick={selectObsidianFolder} style={folderButtonStyle}>
+                    Buscar pasta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearObsidianFolder}
+                    disabled={!formData.obsidianVaultPath}
+                    style={{ ...folderButtonStyle, color: '#94a3b8', cursor: formData.obsidianVaultPath ? 'pointer' : 'default' }}
+                  >
+                    Limpar
+                  </button>
+                </div>
+                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                  Selecione uma pasta do vault do Obsidian.
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                  Saída de áudio para ouvir
+                </label>
+                <select
+                  value={formData.audioOutputDevice}
+                  onChange={(e) => setFormData({ ...formData, audioOutputDevice: e.target.value })}
                   style={inputStyle}
-                  onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
-                  onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
-                />
+                  title="O copilot ouvirá o monitor desta saída"
+                >
+                  <option value="">Saída padrão do sistema</option>
+                  {audioOutputs.map((output) => (
+                    <option key={output.id} value={output.id}>
+                      {output.label}
+                    </option>
+                  ))}
+                </select>
+                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                  O copilot ouvirá o áudio reproduzido nessa saída.
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                  Modelo de transcrição
+                </label>
+                <select
+                  value={formData.transcriberModel}
+                  onChange={(e) => setFormData({ ...formData, transcriberModel: e.target.value })}
+                  style={inputStyle}
+                >
+                  <option value="" disabled>
+                    {transcriptionModels.length ? 'Selecione um modelo' : 'Nenhum modelo encontrado'}
+                  </option>
+                  {transcriptionModels.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+                <span
+                  style={{
+                    fontSize: '0.72rem',
+                    color: transcriptionModels.length ? '#64748b' : '#f87171'
+                  }}
+                >
+                  {transcriptionModels.length
+                    ? 'Modelo local usado para transformar áudio em texto.'
+                    : 'Nenhuma pasta Vosk válida foi encontrada na raiz do projeto.'}
+                </span>
               </div>
               <div style={{ display: 'flex', gap: '10px' }}>
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -661,7 +854,7 @@ function App() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
           <button
             onClick={handleStart}
-            disabled={isPreparingSources}
+            disabled={isPreparingSources || transcriptionModels.length === 0 || !formData.transcriberModel}
             style={{
               background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
               border: 'none',
@@ -677,7 +870,11 @@ function App() {
             onMouseEnter={(e) => (e.target.style.boxShadow = '0 6px 20px rgba(6, 182, 212, 0.5)')}
             onMouseLeave={(e) => (e.target.style.boxShadow = '0 4px 14px rgba(6, 182, 212, 0.35)')}
           >
-            {isPreparingSources ? 'Preparando fontes locais…' : '🚀 Iniciar reunião'}
+            {isPreparingSources
+              ? 'Preparando fontes locais…'
+              : transcriptionModels.length === 0
+                ? 'Modelo de transcrição ausente'
+                : '🚀 Iniciar reunião'}
           </button>
         </div>
       </div>
