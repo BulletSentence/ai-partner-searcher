@@ -7,6 +7,102 @@
     {
       "canonical": "Paketa",
       "aliases": ["paketa", "paqueta", "paceta"]
+    },
+    {
+      "canonical": "Rubicon 2",
+      "aliases": ["rubicon 2", "rubicon dois", "rubicom 2", "rubicom dois"]
+    },
+    {
+      "canonical": "Credifit",
+      "aliases": ["credifit", "credi fit", "credit fit"]
+    },
+    {
+      "canonical": "Dataprev",
+      "aliases": ["dataprev", "data prev", "data preve"]
+    },
+    {
+      "canonical": "e-Consignado",
+      "aliases": ["e-consignado", "e consignado", "i consignado", "consignado eletrônico"]
+    },
+    {
+      "canonical": "Crédito do Trabalhador",
+      "aliases": ["crédito do trabalhador", "credito do trabalhador", "crédito trabalhador"]
+    },
+    {
+      "canonical": "FIDC",
+      "aliases": ["fidc", "f i d c", "fidici"]
+    },
+    {
+      "canonical": "API",
+      "aliases": ["api", "a p i"]
+    },
+    {
+      "canonical": "API externa",
+      "aliases": ["api externa", "a p i externa", "api externo"]
+    },
+    {
+      "canonical": "endpoint",
+      "aliases": ["endpoint", "end point", "end pointi"]
+    },
+    {
+      "canonical": "webhook",
+      "aliases": ["webhook", "web hook", "web look"]
+    },
+    {
+      "canonical": "token",
+      "aliases": ["token", "tô quen"]
+    },
+    {
+      "canonical": "Bearer",
+      "aliases": ["bearer", "barer", "bêrer"]
+    },
+    {
+      "canonical": "OAuth",
+      "aliases": ["oauth", "ou au t", "o auth"]
+    },
+    {
+      "canonical": "JSON",
+      "aliases": ["json", "jason", "j son"]
+    },
+    {
+      "canonical": "HTTP",
+      "aliases": ["http", "h t t p"]
+    },
+    {
+      "canonical": "OpenAI",
+      "aliases": ["openai", "open ai", "open eye"]
+    },
+    {
+      "canonical": "Gemini",
+      "aliases": ["gemini", "gemine"]
+    },
+    {
+      "canonical": "Claude",
+      "aliases": ["claude", "clod"]
+    },
+    {
+      "canonical": "Ollama",
+      "aliases": ["ollama", "o lama", "olama"]
+    },
+    {
+      "canonical": "Obsidian",
+      "aliases": ["obsidian", "ob sidian", "obsidiana"]
+    },
+    {
+      "canonical": "Vosk",
+      "aliases": ["vosk", "vosque"]
+    },
+    {
+      "canonical": "FGTS",
+      "aliases": ["fgts", "f g t s", "efe ge te esse"]
+    },
+    {
+      "canonical": "averbação",
+      "aliases": ["averbação", "averbacao", "averbação do contrato"]
+    },
+    {
+      "canonical": "margem consignável",
+      "aliases": ["margem consignável", "margem consignavel", "margem disponível", "margem disponivel"]
     }
   ]
 }
