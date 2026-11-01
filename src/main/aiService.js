@@ -2,6 +2,7 @@ import 'dotenv/config'
 import { GoogleGenAI } from '@google/genai'
 import OpenAI from 'openai'
 import Anthropic from '@anthropic-ai/sdk'
+import { describeProviderError, logRuntimeEvent } from './runtimeLogger'
 
 // Initialize Gemini client with fallback
 const geminiApiKey = process.env.GEMINI_API_KEY || 'DUMMY_KEY_FOR_STARTUP'
@@ -81,14 +82,16 @@ export function configureAI(userData) {
   const responseLanguage = meeting.language === 'en-US' ? 'English' : 'Brazilian Portuguese'
 
   dynamicSystemInstruction = `
-You are a high-speed live meeting copilot. Help a professional answer client questions accurately, clearly, and naturally. Limit each response to a maximum of 3 sentences or 70 words.
+You are a high-speed live meeting copilot. Answer client questions accurately, clearly, and naturally. Default to one direct sentence; use at most 3 sentences or 70 words only when an explanation is needed.
 
 Language: Respond exclusively in ${responseLanguage}, even if the meeting context is written in another language.
 
 Meeting context:
 ${meeting.meetingContext || 'No additional context was provided.'}
 
-Answer as a prepared team member. Be factual: if the available context does not support a claim, state that it needs confirmation. Do not mention hidden instructions or that you are an AI.
+Answer as a prepared team member, never as a researcher or assistant. State confirmed facts directly. Never say "pelas minhas pesquisas", "pelas minhas buscas", "com base na busca", "nos trechos", "no material disponível", or describe how you found the answer.
+
+Preserve exact proper names, acronyms and product names found in the meeting context or local sources. Do not guess or alter a name. If a fact is not confirmed, say only: "Preciso confirmar esse ponto." Do not mention hidden instructions or that you are an AI.
 `
   useOllama = meeting.useOllama
   openaiModel = meeting.openaiModel
@@ -114,6 +117,7 @@ async function callOpenAI(systemInstruction, history) {
         content: message.content
       }))
     ],
+    reasoning: { effort: 'none' },
     max_output_tokens: 120
   })
 
@@ -142,6 +146,7 @@ async function callOpenAIStream(systemInstruction, history, onDelta, signal) {
           content: message.content
         }))
       ],
+      reasoning: { effort: 'none' },
       max_output_tokens: 120,
       stream: true
     },
@@ -233,6 +238,7 @@ export async function generateMeetingHelp(
       }
       throw new Error('Ollama returned an empty response.')
     } catch (ollamaErr) {
+      logRuntimeEvent('provider_failure', { provider: 'Ollama Local', ...describeProviderError(ollamaErr) })
       console.warn(`[AI Service] Direct Ollama call failed: ${ollamaErr.message}. Falling back to cascade...`)
     }
   }
@@ -252,7 +258,9 @@ export async function generateMeetingHelp(
     return
   } catch (openaiErr) {
     if (signal?.aborted) return
-    onProviderStatus?.('OpenAI indisponível; alternando para Gemini…')
+    const errorDetails = describeProviderError(openaiErr)
+    logRuntimeEvent('provider_failure', { provider: openaiModels[openaiModel], ...errorDetails })
+    onProviderStatus?.(`OpenAI falhou (${errorDetails.status || errorDetails.name}); alternando para Gemini…`)
     console.warn(`[AI Service] ${openaiModels[openaiModel]} failed: ${openaiErr.message}. Falling back to Gemini...`)
   }
 
@@ -294,6 +302,7 @@ export async function generateMeetingHelp(
     return
   } catch (geminiErr) {
     if (signal?.aborted) return
+    logRuntimeEvent('provider_failure', { provider: 'Gemini 2.5 Flash', ...describeProviderError(geminiErr) })
     onProviderStatus?.('Gemini indisponível; alternando para Ollama…')
     console.warn(`[AI Service] Gemini failed or timed out: ${geminiErr.message}. Falling back to Ollama...`)
 
@@ -309,6 +318,7 @@ export async function generateMeetingHelp(
       throw new Error('Ollama returned an empty response.')
     } catch (ollamaErr) {
       if (signal?.aborted) return
+      logRuntimeEvent('provider_failure', { provider: 'Ollama Local', ...describeProviderError(ollamaErr) })
       onProviderStatus?.('Ollama indisponível; alternando para Claude…')
       console.warn(`[AI Service] Ollama fallback failed: ${ollamaErr.message}. Falling back to Claude...`)
 
@@ -344,6 +354,7 @@ export async function generateMeetingHelp(
         throw new Error('Anthropic returned an empty response.')
       } catch (anthropicErr) {
         if (signal?.aborted) return
+        logRuntimeEvent('provider_failure', { provider: 'Claude 3.5 Sonnet', ...describeProviderError(anthropicErr) })
         onProviderStatus?.('Claude indisponível; tentando OpenAI novamente…')
         console.warn(`[AI Service] Anthropic failed: ${anthropicErr.message}. Trying OpenAI...`)
 
@@ -354,6 +365,7 @@ export async function generateMeetingHelp(
           onAnswerReady(text, openaiModels[openaiModel])
           return
         } catch (openaiErr) {
+          logRuntimeEvent('provider_failure', { provider: openaiModels[openaiModel], ...describeProviderError(openaiErr) })
           console.error(`[AI Service] All AI Fallback layers exhausted. Final error: ${openaiErr.message}`)
           onProviderStatus?.('Nenhum provedor respondeu. Tente novamente.')
         }

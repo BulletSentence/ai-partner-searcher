@@ -32,6 +32,21 @@ body {
   min-height: 0;
 }
 
+/* The setup form can be taller than the transparent window. Keep its controls,
+ * especially the start button, reachable instead of clipping the lower section. */
+.setup-shell {
+  overflow-y: auto !important;
+  justify-content: flex-start !important;
+  gap: 20px;
+}
+
+.setup-shell > :last-child {
+  position: sticky;
+  bottom: 0;
+  padding: 12px 0 2px;
+  background: linear-gradient(to bottom, transparent, rgba(15, 15, 20, 0.98) 24%);
+}
+
 .app-shell input,
 .app-shell select,
 .app-shell textarea {

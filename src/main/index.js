@@ -15,6 +15,9 @@ import { captureScreenAndExtractText } from './screenCapture'
 import { saveMeetingSession } from './meetingSessionLogger'
 import { findRelevantContext, indexKnowledgeSources } from './contextService'
 import { isLikelyQuestion } from './questionDetector'
+import { logRuntimeEvent } from './runtimeLogger'
+import { getMeetingSettings, saveMeetingSettings } from './meetingSettings'
+import { correctTerminology, loadTerminologyFile } from './terminologyService'
 
 let mainWindow = null
 
@@ -39,6 +42,7 @@ function generateMeetingAnswer(questionText) {
   lastMeetingQuestion = questionText
   const startedAt = Date.now()
   const excerpts = findRelevantContext(questionText, { source: activeSourceFilter })
+  logRuntimeEvent('answer_requested', { localExcerptCount: excerpts.length, sourceFilter: activeSourceFilter })
   const searchMs = Date.now() - startedAt
   let firstTokenMs = null
   const sources = excerpts.map((excerpt) => excerpt.path)
@@ -58,6 +62,7 @@ function generateMeetingAnswer(questionText) {
       sources,
       latency
     })
+    logRuntimeEvent('answer_completed', { provider, totalMs, firstTokenMs: latency.firstTokenMs, sourceCount: sources.length })
     console.log(`[AI Answer] [${provider}] using ${excerpts.length} local excerpt(s): ${answer}`)
     if (mainWindow) {
       mainWindow.webContents.send('on-ai-answer', {
@@ -82,6 +87,7 @@ function generateMeetingAnswer(questionText) {
   }, controller.signal, (status) => {
     if (requestId !== answerRequestId || controller.signal.aborted || !mainWindow) return
     mainWindow.webContents.send('on-ai-answer-status', status)
+    logRuntimeEvent('provider_status', { status })
   })
 }
 
@@ -116,14 +122,15 @@ function createWindow() {
     if (extractedText) {
       console.log(`[OCR Context] Detected text (length: ${extractedText.length})`)
 
-      const prefix = `[Screen Context Detected]: ${extractedText}`
+      const normalizedText = correctTerminology(extractedText)
+      const prefix = `[Screen Context Detected]: ${normalizedText}`
       transcriptSentences.push(prefix)
 
       if (aiTimeout) {
         clearTimeout(aiTimeout)
       }
 
-      generateMeetingAnswer(extractedText)
+      generateMeetingAnswer(normalizedText)
     } else {
       console.log('[OCR] No text extracted from primary screen.')
     }
@@ -197,14 +204,15 @@ function switchAudioSource(source) {
       calculateAndSendAudioLevel(chunk)
 
       processAudioStream(chunk, (text) => {
-        console.log(`[Transcription] [${currentAudioSource}]: ${text}`)
+        const normalizedText = correctTerminology(text)
+        console.log(`[Transcription] [${currentAudioSource}]: ${normalizedText}`)
         if (mainWindow) {
-          mainWindow.webContents.send('on-transcription', text)
+          mainWindow.webContents.send('on-transcription', normalizedText)
         }
 
-        let formattedText = text
+        let formattedText = normalizedText
         if (currentAudioSource === 'mic') {
-          formattedText = `[Question asked in the meeting]: ${text}`
+          formattedText = `[Question asked in the meeting]: ${normalizedText}`
         }
 
         transcriptSentences.push(formattedText)
@@ -212,9 +220,9 @@ function switchAudioSource(source) {
           clearTimeout(aiTimeout)
         }
 
-        if (isLikelyQuestion(text)) {
+        if (isLikelyQuestion(normalizedText)) {
           aiTimeout = setTimeout(() => {
-            generateMeetingAnswer(text)
+            generateMeetingAnswer(normalizedText)
           }, 650)
         }
       })
@@ -273,9 +281,15 @@ ipcMain.on('stop-meeting', () => {
 })
 
 // IPC: Start meeting.
-ipcMain.on('start-meeting', (_event, data) => {
+ipcMain.on('start-meeting', async (_event, data) => {
   // Load the matching local speech recognition model before audio capture begins.
   const meetingProfile = configureAI(data)
+  const grammar = await loadTerminologyFile()
+  if (grammar.error) {
+    console.warn(`[Terminology] Could not load ${grammar.path}: ${grammar.error}`)
+  } else {
+    console.log(`[Terminology] Loaded ${grammar.count} grammar term(s) from ${grammar.path}`)
+  }
   currentMeetingData = meetingProfile
   configureTranscriber(meetingProfile.language)
 
@@ -380,6 +394,11 @@ ipcMain.handle('get-saved-meetings', async () => {
 
 // Persistent profile values are intentionally exposed without API keys.
 ipcMain.handle('get-default-meeting-profile', () => getDefaultMeetingProfile())
+ipcMain.handle('get-meeting-settings', () => getMeetingSettings())
+ipcMain.handle('save-meeting-settings', async (_event, settings) => {
+  await saveMeetingSettings(settings)
+  return true
+})
 
 // App Lifecycle
 app.whenReady().then(() => {

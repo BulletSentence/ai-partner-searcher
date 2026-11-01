@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { findRelevantContext, indexKnowledgeSources } from '../src/main/contextService.js'
 import { isLikelyQuestion } from '../src/main/questionDetector.js'
+import { configureTerminology, correctTerminology } from '../src/main/terminologyService.js'
 
 async function makeFixture() {
   const root = await mkdtemp(join(tmpdir(), 'meeting-copilot-context-'))
@@ -59,4 +60,14 @@ test('only flags likely spoken questions for automatic AI responses', () => {
   assert.equal(isLikelyQuestion('Tenho uma dúvida sobre as permissões'), true)
   assert.equal(isLikelyQuestion('A reunião começa às nove horas'), false)
   assert.equal(isLikelyQuestion('ok'), false)
+})
+
+test('corrects configured meeting terminology before search and generation', () => {
+  configureTerminology([
+    { canonical: 'FIDC HAM', aliases: ['fidici ram', 'fidc ram'] },
+    { canonical: 'Paketa', aliases: ['paqueta'] }
+  ])
+
+  assert.equal(correctTerminology('quem é o fidici ram da paqueta?'), 'quem é o FIDC HAM da Paketa?')
+  assert.equal(correctTerminology('a reunião começa às nove'), 'a reunião começa às nove')
 })

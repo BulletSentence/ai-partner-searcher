@@ -9,3 +9,4 @@ vosk-model/
 vosk-model-*/
 vosk-model-*.zip
 meetings/
+logs/

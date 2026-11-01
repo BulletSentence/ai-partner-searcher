@@ -39,6 +39,8 @@ OPENAI_MODEL=gpt-6-luna
 
 `PROJECT_PATHS` aceita um caminho por linha. O índice ignora diretórios pesados, como `node_modules`, `.git`, builds e a pasta interna `.obsidian`.
 
+Edite `meeting-grammar.json` para registrar termos próprios, siglas e variações de transcrição. Cada entrada define o nome canônico e seus aliases; o app aplica as correções antes de pesquisar ou gerar uma resposta.
+
 Para usar geração local:
 
 ```bash

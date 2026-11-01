@@ -17,6 +17,8 @@ const api = {
   close: () => ipcRenderer.send('close-window'),
   onWindowLockChange: (cb) => ipcRenderer.on('window-unlocked', (_e, val) => cb(val)),
   getDefaultMeetingProfile: () => ipcRenderer.invoke('get-default-meeting-profile'),
+  getMeetingSettings: () => ipcRenderer.invoke('get-meeting-settings'),
+  saveMeetingSettings: (settings) => ipcRenderer.invoke('save-meeting-settings', settings),
   prepareKnowledgeSources: (data) => ipcRenderer.invoke('prepare-knowledge-sources', data),
   getSavedMeetings: () => ipcRenderer.invoke('get-saved-meetings'),
   toggleAudioSource: (source) => ipcRenderer.send('toggle-audio-source', source),
