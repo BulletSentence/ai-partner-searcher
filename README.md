@@ -1,9 +1,5 @@
 # Copilot de Reuniões com IA
 
-Aplicativo desktop local-first para reuniões com clientes. Ele transcreve o áudio, consulta projetos e um vault do Obsidian selecionados por você e exibe respostas curtas em uma janela transparente, sempre visível.
-
-Use somente com o consentimento das pessoas envolvidas e conforme as regras da plataforma de reunião.
-
 ## Recursos
 
 - Transcrição local em tempo real com Vosk, em português brasileiro ou inglês.
