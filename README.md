@@ -39,6 +39,26 @@ OPENAI_MODEL=gpt-6-luna
 
 `PROJECT_PATHS` aceita um caminho por linha. O índice ignora diretórios pesados, como `node_modules`, `.git`, builds e a pasta interna `.obsidian`.
 
+### Modelos de voz (Vosk)
+
+Baixe os modelos oficiais na página do Vosk:
+
+<https://alphacephei.com/vosk/models>
+
+Para português brasileiro, as opções recomendadas são:
+
+- [Modelo pequeno `vosk-model-small-pt-0.3` (31 MB)](https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip): mais rápido e leve.
+- [Modelo FalaBrasil `vosk-model-pt-fb-v0.1.1-20220516_2113` (1,6 GB)](https://alphacephei.com/vosk/models/vosk-model-pt-fb-v0.1.1-20220516_2113.zip): mais preciso, porém mais pesado.
+
+Depois de baixar:
+
+1. Extraia o arquivo ZIP na raiz deste projeto.
+2. Mantenha o nome original da pasta, começando com `vosk-model`.
+3. Se estiver usando o modelo pequeno e quiser o nome curto, a pasta também pode ser renomeada para `vosk-model-pt`.
+4. Reinicie o app e selecione o modelo no campo **Modelo de transcrição** da tela inicial.
+
+O ZIP não deve ficar apenas como arquivo compactado: o app procura uma pasta contendo arquivos do modelo, como `final.mdl`, `conf/` e `graph/`. Uma pasta chamada `voskel`, por exemplo, não será detectada; use `vosk-model-pt` ou o nome original do modelo.
+
 Edite `meeting-grammar.json` para registrar termos próprios, siglas e variações de transcrição. Cada entrada define o nome canônico e seus aliases; o app aplica as correções antes de pesquisar ou gerar uma resposta.
 
 Para usar geração local:
