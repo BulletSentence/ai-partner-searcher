@@ -1,0 +1,52 @@
+{
+  "name": "ai-assistant",
+  "version": "1.0.0",
+  "description": "A local-first AI meeting copilot with live transcription and contextual answers",
+  "main": "./out/main/index.js",
+  "author": "example.com",
+  "homepage": "https://electron-vite.org",
+  "scripts": {
+    "format": "prettier --write .",
+    "lint": "eslint --cache .",
+    "test": "node --experimental-default-type=module --test tests/*.test.js",
+    "start": "electron-vite preview",
+    "dev": "electron-vite dev -- --no-sandbox",
+    "dev:node20": "ELECTRON_RUN_AS_NODE= npx --yes -p node@20 -c 'electron-vite dev -- --no-sandbox'",
+    "build": "electron-vite build",
+    "postinstall": "electron-builder install-app-deps",
+    "build:unpack": "npm run build && electron-builder --dir",
+    "build:win": "npm run build && electron-builder --win",
+    "build:mac": "npm run build && electron-builder --mac",
+    "build:linux": "npm run build && electron-builder --linux"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "@electron-toolkit/preload": "^3.0.2",
+    "@electron-toolkit/utils": "^4.0.0",
+    "@google/genai": "^2.8.0",
+    "dotenv": "^18.0.5",
+    "ffi-napi": "npm:@napi-ffi/ffi-napi@4.0.6",
+    "openai": "^6.42.0",
+    "react-markdown": "^10.1.0",
+    "ref-napi": "npm:@napi-ffi/ref-napi@3.0.8",
+    "remark-gfm": "^4.0.1",
+    "tesseract.js": "^7.0.0",
+    "vosk": "^0.3.39"
+  },
+  "devDependencies": {
+    "@electron-toolkit/eslint-config": "^2.1.0",
+    "@electron-toolkit/eslint-config-prettier": "^3.0.0",
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron": "^39.2.6",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^5.0.0",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "prettier": "^3.7.4",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "vite": "^7.2.6"
+  }
+}
