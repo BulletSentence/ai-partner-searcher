@@ -1,4 +1,13 @@
-import { app, shell, BrowserWindow, ipcMain, globalShortcut, dialog } from 'electron'
+import {
+  app,
+  shell,
+  BrowserWindow,
+  ipcMain,
+  globalShortcut,
+  dialog,
+  desktopCapturer,
+  session
+} from 'electron'
 import { join } from 'path'
 import fs from 'fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -126,6 +135,28 @@ function createWindow() {
 
   mainWindow.setContentProtection(true)
 
+  if (process.platform === 'darwin') {
+    session.defaultSession.setDisplayMediaRequestHandler(
+      async (_request, callback) => {
+        try {
+          const sources = await desktopCapturer.getSources({
+            types: ['screen'],
+            thumbnailSize: { width: 0, height: 0 },
+            fetchWindowIcons: false
+          })
+          callback(sources[0] ? { video: sources[0], audio: 'loopback' } : null)
+        } catch (error) {
+          logRuntimeEvent('native_audio_capture_setup_failed', {
+            platform: process.platform,
+            message: error.message
+          })
+          callback(null)
+        }
+      },
+      { useSystemPicker: false }
+    )
+  }
+
   // OCR screen grab hotkey (Ctrl+Shift+S)
   globalShortcut.register('CommandOrControl+Shift+S', async () => {
     console.log('[OCR] Screen Capture and OCR starting...')
@@ -204,6 +235,34 @@ function calculateAndSendAudioLevel(chunk) {
   }
 }
 
+function handleCapturedAudio(chunk) {
+  calculateAndSendAudioLevel(chunk)
+
+  processAudioStream(chunk, (text) => {
+    const normalizedText = correctTerminology(text)
+    console.log(`[Transcription] [${currentAudioSource}]: ${normalizedText}`)
+    if (mainWindow) {
+      mainWindow.webContents.send('on-transcription', normalizedText)
+    }
+
+    let formattedText = normalizedText
+    if (currentAudioSource === 'mic') {
+      formattedText = `[Question asked in the meeting]: ${normalizedText}`
+    }
+
+    transcriptSentences.push(formattedText)
+    if (aiTimeout) {
+      clearTimeout(aiTimeout)
+    }
+
+    if (isLikelyQuestion(normalizedText)) {
+      aiTimeout = setTimeout(() => {
+        generateMeetingAnswer(normalizedText)
+      }, 650)
+    }
+  })
+}
+
 function switchAudioSource(source) {
   currentAudioSource = source
   console.log(`[Main] Switched active audio source variable to: ${source}`)
@@ -217,33 +276,17 @@ function switchAudioSource(source) {
     audioCaptureProcess = null
   }
 
+  if (process.platform === 'darwin') {
+    if (source === 'system') {
+      if (mainWindow) mainWindow.webContents.send('start-native-audio-capture')
+      return
+    }
+    if (mainWindow) mainWindow.webContents.send('stop-native-audio-capture')
+  }
+
   if (currentMeetingData) {
     audioCaptureProcess = startAudioCapture((chunk) => {
-      calculateAndSendAudioLevel(chunk)
-
-      processAudioStream(chunk, (text) => {
-        const normalizedText = correctTerminology(text)
-        console.log(`[Transcription] [${currentAudioSource}]: ${normalizedText}`)
-        if (mainWindow) {
-          mainWindow.webContents.send('on-transcription', normalizedText)
-        }
-
-        let formattedText = normalizedText
-        if (currentAudioSource === 'mic') {
-          formattedText = `[Question asked in the meeting]: ${normalizedText}`
-        }
-
-        transcriptSentences.push(formattedText)
-        if (aiTimeout) {
-          clearTimeout(aiTimeout)
-        }
-
-        if (isLikelyQuestion(normalizedText)) {
-          aiTimeout = setTimeout(() => {
-            generateMeetingAnswer(normalizedText)
-          }, 650)
-        }
-      })
+      handleCapturedAudio(chunk)
     }, source, currentAudioOutputDevice)
   }
 }
@@ -265,6 +308,10 @@ function handleStopSession() {
       console.error('[Main] Error stopping parec capture:', e.message)
     }
     audioCaptureProcess = null
+  }
+
+  if (process.platform === 'darwin' && mainWindow) {
+    mainWindow.webContents.send('stop-native-audio-capture')
   }
 
   if (currentMeetingData) {
@@ -341,6 +388,17 @@ ipcMain.handle('prepare-knowledge-sources', async (_event, data) => {
 
 ipcMain.handle('get-audio-outputs', () => listAudioOutputs())
 ipcMain.handle('get-transcription-models', () => listTranscriptionModels())
+
+ipcMain.on('native-audio-chunk', (_event, chunk) => {
+  if (process.platform === 'darwin' && currentMeetingData && currentAudioSource === 'system') {
+    handleCapturedAudio(Buffer.from(chunk))
+  }
+})
+
+ipcMain.on('native-audio-capture-error', (_event, message) => {
+  logRuntimeEvent('native_audio_capture_error', { platform: process.platform, message })
+  console.error(`[Native Audio] ${message}`)
+})
 
 // Native folder pickers used by the initial setup form.
 ipcMain.handle('select-folders', async (_event, { multiple = false } = {}) => {

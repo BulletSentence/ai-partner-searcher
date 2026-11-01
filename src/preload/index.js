@@ -3,6 +3,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 // Custom APIs for renderer
 const api = {
+  isMac: process.platform === 'darwin',
   onTranscription: (callback) => ipcRenderer.on('on-transcription', (_event, value) => callback(value)),
   onAiAnswer: (callback) => ipcRenderer.on('on-ai-answer', (_event, value) => callback(value)),
   onAiAnswerStart: (callback) => ipcRenderer.on('on-ai-answer-start', (_event, value) => callback(value)),
@@ -26,6 +27,10 @@ const api = {
   getSavedMeetings: () => ipcRenderer.invoke('get-saved-meetings'),
   toggleAudioSource: (source) => ipcRenderer.send('toggle-audio-source', source),
   onAudioLevel: (cb) => ipcRenderer.on('audio-level', (_e, val) => cb(val)),
+  onNativeAudioCaptureStart: (cb) => ipcRenderer.on('start-native-audio-capture', () => cb()),
+  onNativeAudioCaptureStop: (cb) => ipcRenderer.on('stop-native-audio-capture', () => cb()),
+  sendNativeAudioChunk: (chunk) => ipcRenderer.send('native-audio-chunk', chunk),
+  reportNativeAudioError: (message) => ipcRenderer.send('native-audio-capture-error', message),
   setWindowInteractive: () => ipcRenderer.send('set-window-interactive'),
   setWindowClickthrough: () => ipcRenderer.send('set-window-clickthrough'),
   maximize: () => ipcRenderer.send('maximize-window')

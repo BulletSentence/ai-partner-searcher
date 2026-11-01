@@ -40,6 +40,60 @@ function App() {
   const [audioLevel, setAudioLevel] = useState(0)
   const [audioSource, setAudioSource] = useState('SYSTEM')
   const transcriptEndRef = useRef(null)
+  const nativeAudioCleanupRef = useRef(null)
+
+  const stopNativeAudioCapture = async () => {
+    const cleanup = nativeAudioCleanupRef.current
+    nativeAudioCleanupRef.current = null
+    if (cleanup) await cleanup()
+  }
+
+  const startNativeAudioCapture = async () => {
+    if (!window.api.isMac || nativeAudioCleanupRef.current) return
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 1, width: 1, height: 1 },
+        audio: true
+      })
+      const audioTrack = stream.getAudioTracks()[0]
+      if (!audioTrack) {
+        stream.getTracks().forEach((track) => track.stop())
+        throw new Error('O macOS não retornou uma faixa de áudio do sistema.')
+      }
+
+      const audioContext = new AudioContext({ sampleRate: 16000 })
+      const source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]))
+      const processor = audioContext.createScriptProcessor(4096, 1, 1)
+      const silentGain = audioContext.createGain()
+      silentGain.gain.value = 0
+
+      processor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0)
+        const pcm = new Int16Array(input.length)
+        for (let index = 0; index < input.length; index += 1) {
+          const sample = Math.max(-1, Math.min(1, input[index]))
+          pcm[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+        }
+        window.api.sendNativeAudioChunk(pcm.buffer)
+      }
+
+      source.connect(processor)
+      processor.connect(silentGain)
+      silentGain.connect(audioContext.destination)
+
+      nativeAudioCleanupRef.current = async () => {
+        processor.disconnect()
+        source.disconnect()
+        silentGain.disconnect()
+        stream.getTracks().forEach((track) => track.stop())
+        await audioContext.close()
+      }
+    } catch (error) {
+      window.api.reportNativeAudioError(error.message)
+      throw error
+    }
+  }
 
   // Load saved sessions when returning to the setup screen
   const loadSavedSessions = async () => {
@@ -64,6 +118,15 @@ function App() {
       .then(([profile, settings]) => setFormData((current) => ({ ...current, ...profile, ...settings })))
       .catch((err) => console.error('Error loading meeting settings:', err))
       .finally(() => setHasLoadedSettings(true))
+  }, [])
+
+  useEffect(() => {
+    window.api.onNativeAudioCaptureStart(() => {
+      startNativeAudioCapture().catch((err) => console.error('Native audio capture failed:', err))
+    })
+    window.api.onNativeAudioCaptureStop(() => {
+      stopNativeAudioCapture().catch((err) => console.error('Native audio cleanup failed:', err))
+    })
   }, [])
 
   useEffect(() => {
@@ -158,6 +221,7 @@ function App() {
     if (!formData.transcriberModel || transcriptionModels.length === 0) return
     setIsPreparingSources(true)
     try {
+      if (window.api.isMac) await startNativeAudioCapture()
       const status = await window.api.prepareKnowledgeSources(formData)
       setIndexStatus(status)
       setSourceFilter('all')

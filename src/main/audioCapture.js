@@ -7,37 +7,7 @@ const execFileAsync = promisify(execFile)
 /** Returns the output devices exposed by PulseAudio/PipeWire. */
 export async function listAudioOutputs() {
   if (process.platform === 'darwin') {
-    try {
-      const { stderr } = await execFileAsync('ffmpeg', [
-        '-f',
-        'avfoundation',
-        '-list_devices',
-        'true',
-        '-i',
-        ''
-      ])
-      const audioSection = stderr.split('AVFoundation audio devices:')[1] || ''
-      return [...audioSection.matchAll(/\[(\d+)\]\s+(.+)/g)].map(([, id, label]) => ({
-        id,
-        label: label.trim()
-      }))
-    } catch (error) {
-      // ffmpeg exits with a non-zero code while listing AVFoundation devices.
-      const output = `${error.stderr || ''}`
-      const audioSection = output.split('AVFoundation audio devices:')[1] || ''
-      const devices = [...audioSection.matchAll(/\[(\d+)\]\s+(.+)/g)].map(([, id, label]) => ({
-        id,
-        label: label.trim()
-      }))
-      if (devices.length) return devices
-      console.warn(`[Audio Capture] Could not list macOS audio devices: ${error.message}`)
-      logRuntimeEvent('audio_devices_list_failed', {
-        platform: process.platform,
-        code: error.code,
-        message: error.message
-      })
-      return []
-    }
+    return [{ id: 'native-system', label: 'Áudio do sistema (captura nativa)' }]
   }
 
   if (process.platform === 'win32') {
