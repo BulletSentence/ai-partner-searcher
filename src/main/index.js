@@ -374,7 +374,8 @@ ipcMain.on('start-meeting', async (_event, data) => {
 
   // Lock click-through on start
   if (mainWindow) {
-    mainWindow.setIgnoreMouseEvents(true, { forwardToDesktop: true })
+    // Keep the HUD interactive so its controls and answer actions can be clicked.
+    mainWindow.setIgnoreMouseEvents(false)
     mainWindow.webContents.send('window-unlocked', false)
   }
 })
@@ -440,12 +441,14 @@ ipcMain.on('set-knowledge-source-filter', (_event, source) => {
 ipcMain.on('set-window-interactive', () => {
   if (mainWindow) {
     mainWindow.setIgnoreMouseEvents(false)
+    mainWindow.webContents.send('window-unlocked', true)
   }
 })
 
 ipcMain.on('set-window-clickthrough', () => {
   if (mainWindow) {
     mainWindow.setIgnoreMouseEvents(true, { forwardToDesktop: true })
+    mainWindow.webContents.send('window-unlocked', false)
   }
 })
 

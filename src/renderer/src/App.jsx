@@ -39,6 +39,7 @@ function App() {
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false)
   const [audioLevel, setAudioLevel] = useState(0)
   const [audioSource, setAudioSource] = useState('SYSTEM')
+  const [isClickThrough, setIsClickThrough] = useState(false)
   const transcriptEndRef = useRef(null)
   const nativeAudioCleanupRef = useRef(null)
 
@@ -121,6 +122,7 @@ function App() {
   }, [])
 
   useEffect(() => {
+    window.api.onWindowLockChange((isInteractive) => setIsClickThrough(!isInteractive))
     window.api.onNativeAudioCaptureStart(() => {
       startNativeAudioCapture().catch((err) => console.error('Native audio capture failed:', err))
     })
@@ -265,6 +267,16 @@ function App() {
     if (!question) return
     window.api.askMeetingQuestion(question)
     setManualQuestion('')
+  }
+
+  const toggleClickThrough = () => {
+    const nextValue = !isClickThrough
+    setIsClickThrough(nextValue)
+    if (nextValue) {
+      window.api.setWindowClickthrough()
+    } else {
+      window.api.setWindowInteractive()
+    }
   }
 
   const selectProjectFolders = async () => {
@@ -1029,7 +1041,6 @@ function App() {
       <div
         className="hud-topbar"
         onMouseEnter={() => window.api.setWindowInteractive()}
-        onMouseLeave={() => window.api.setWindowClickthrough()}
         style={{
           display: 'flex',
           justifyContent: 'space-between',
@@ -1055,6 +1066,24 @@ function App() {
           className="hud-window-controls"
           style={{ display: 'flex', alignItems: 'center', gap: '12px', WebkitAppRegion: 'no-drag' }}
         >
+          <button
+            type="button"
+            onClick={toggleClickThrough}
+            className="window-control-btn"
+            title={isClickThrough ? 'Ativar cliques na janela' : 'Deixar cliques passarem para trás'}
+            style={{
+              background: isClickThrough ? 'rgba(34, 211, 238, 0.18)' : 'none',
+              border: '1px solid rgba(34, 211, 238, 0.3)',
+              borderRadius: '6px',
+              color: '#cbd5e1',
+              cursor: 'pointer',
+              fontSize: '0.7rem',
+              padding: '3px 8px',
+              WebkitAppRegion: 'no-drag'
+            }}
+          >
+            {isClickThrough ? 'Interagir' : 'Click-through'}
+          </button>
           <span
             onClick={handleStop}
             className="window-control-btn"

@@ -367,7 +367,17 @@ export async function generateMeetingHelp(
         } catch (openaiErr) {
           logRuntimeEvent('provider_failure', { provider: openaiModels[openaiModel], ...describeProviderError(openaiErr) })
           console.error(`[AI Service] All AI Fallback layers exhausted. Final error: ${openaiErr.message}`)
-          onProviderStatus?.('Nenhum provedor respondeu. Tente novamente.')
+          const configuredProviders = [
+            process.env.OPENAI_API_KEY && 'OPENAI_API_KEY',
+            process.env.GEMINI_API_KEY && 'GEMINI_API_KEY',
+            process.env.ANTHROPIC_API_KEY && 'ANTHROPIC_API_KEY',
+            useOllama && 'Ollama'
+          ].filter(Boolean)
+          onProviderStatus?.(
+            configuredProviders.length
+              ? 'Nenhum provedor respondeu. Verifique as chaves e a conexão.'
+              : 'Nenhum provedor configurado. Configure uma chave no .env ou ative o Ollama.'
+          )
         }
       }
     }
