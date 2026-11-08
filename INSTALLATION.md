@@ -27,7 +27,7 @@ sudo apt-get update && sudo apt-get install -y \
 ### 🟢 Phase 2: Node.js Version Constraint
 
 > [!IMPORTANT]
-> You **MUST** use Node.js version **20 (LTS)**. The native dependency `ffi-napi` (which Vosk relies on to bridge native C libraries) will fail to build or load on newer versions like Node v22.
+> Use Node.js 20 LTS for the Electron toolchain used by this project.
 
 We recommend using **NVM** (Node Version Manager) to switch versions:
 
@@ -55,22 +55,13 @@ ollama run gemma2:2b
 
 ---
 
-### 🎙️ Phase 4: Vosk STT Model
+### 🎙️ Phase 4: Whisper.cpp STT
 
-Download and extract the local English speech recognition model. Make sure it is placed in the project root directory:
+Compile the included streaming adapter against Whisper.cpp and download a model. The `turbo` model is the recommended default for Portuguese:
 
 ```bash
-# Download the model zip file
-wget https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-
-# Unzip the contents
-unzip vosk-model-small-en-us-0.15.zip
-
-# Rename the folder to the expected name
-mv vosk-model-small-en-us-0.15 vosk-model
-
-# Clean up the zip file
-rm vosk-model-small-en-us-0.15.zip
+npm run whisper:build
+npm run whisper:model
 ```
 
 ---

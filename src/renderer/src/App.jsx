@@ -24,6 +24,7 @@ function App() {
   const [isPreparingSources, setIsPreparingSources] = useState(false)
   const [audioOutputs, setAudioOutputs] = useState([])
   const [transcriptionModels, setTranscriptionModels] = useState([])
+  const [transcriberStatus, setTranscriberStatus] = useState({ binaryFound: false, modelsFound: 0 })
 
   // HUD State
   const [transcription, setTranscription] = useState('')
@@ -132,11 +133,11 @@ function App() {
   }, [])
 
   useEffect(() => {
-    window.api
-      .getTranscriptionModels()
-      .then((models) => {
+    Promise.all([window.api.getTranscriptionModels(), window.api.getTranscriberStatus()])
+      .then(([models, status]) => {
         const availableModels = Array.isArray(models) ? models : []
         setTranscriptionModels(availableModels)
+        setTranscriberStatus(status || { binaryFound: false, modelsFound: 0 })
         setFormData((current) => {
           const selectedModelIsAvailable = availableModels.some(
             (model) => model.id === current.transcriberModel
@@ -146,7 +147,7 @@ function App() {
             : { ...current, transcriberModel: availableModels[0].id }
         })
       })
-      .catch((err) => console.error('Error loading transcription models:', err))
+      .catch((err) => console.error('Error loading Whisper setup:', err))
   }, [])
 
   useEffect(() => {
@@ -220,7 +221,7 @@ function App() {
   }, [transcriptionHistory, transcription])
 
   const handleStart = async () => {
-    if (!formData.transcriberModel || transcriptionModels.length === 0) return
+    if (!formData.transcriberModel || !transcriberStatus.ready) return
     setIsPreparingSources(true)
     try {
       if (window.api.isMac) await startNativeAudioCapture()
@@ -735,8 +736,13 @@ function App() {
                   }}
                 >
                   {transcriptionModels.length
-                    ? 'Modelo local usado para transformar áudio em texto.'
-                    : 'Nenhuma pasta Vosk válida foi encontrada na raiz do projeto.'}
+                    ? 'Modelo Whisper local usado para transformar áudio em texto.'
+                    : 'Nenhum modelo Whisper foi encontrado na pasta models.'}
+                  {!transcriberStatus.binaryFound && (
+                    <span style={{ display: 'block', marginTop: '4px' }}>
+                      Adaptador Whisper ausente. Execute <code>npm run whisper:build</code>.
+                    </span>
+                  )}
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '10px' }}>
@@ -930,7 +936,7 @@ function App() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
           <button
             onClick={handleStart}
-            disabled={isPreparingSources || transcriptionModels.length === 0 || !formData.transcriberModel}
+            disabled={isPreparingSources || !transcriberStatus.ready || !formData.transcriberModel}
             style={{
               background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
               border: 'none',
@@ -948,8 +954,10 @@ function App() {
           >
             {isPreparingSources
               ? 'Preparando fontes locais…'
-              : transcriptionModels.length === 0
-                ? 'Modelo de transcrição ausente'
+              : !transcriberStatus.binaryFound
+                ? 'Adaptador Whisper ausente'
+                : transcriptionModels.length === 0
+                  ? 'Modelo Whisper ausente'
                 : '🚀 Iniciar reunião'}
           </button>
         </div>
