@@ -22,6 +22,7 @@ const api = {
   saveMeetingSettings: (settings) => ipcRenderer.invoke('save-meeting-settings', settings),
   getAudioOutputs: () => ipcRenderer.invoke('get-audio-outputs'),
   getTranscriptionModels: () => ipcRenderer.invoke('get-transcription-models'),
+  getTranscriberStatus: () => ipcRenderer.invoke('get-transcriber-status'),
   selectFolders: (multiple = false) => ipcRenderer.invoke('select-folders', { multiple }),
   prepareKnowledgeSources: (data) => ipcRenderer.invoke('prepare-knowledge-sources', data),
   getSavedMeetings: () => ipcRenderer.invoke('get-saved-meetings'),

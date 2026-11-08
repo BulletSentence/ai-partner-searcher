@@ -5,8 +5,10 @@ out/
 .eslintcache
 *.log*
 .env
-vosk-model/
-vosk-model-*/
-vosk-model-*.zip
+.cache/
+bin/whisper-stream
+bin/whisper-stream.exe
+models/*.bin
+models/*.gguf
 meetings/
 logs/

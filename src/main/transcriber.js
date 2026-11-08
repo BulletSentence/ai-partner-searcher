@@ -3,124 +3,151 @@ import { existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { logRuntimeEvent } from './runtimeLogger'
 
-const childPath = join(process.cwd(), 'src/main/transcriberChild.js')
+const executableName = process.platform === 'win32' ? 'whisper-stream.exe' : 'whisper-stream'
+const bundledBinary = join(process.resourcesPath || process.cwd(), 'bin', executableName)
+const developmentBinary = join(process.cwd(), 'bin', executableName)
+const bundledModelsDirectory = join(process.resourcesPath || process.cwd(), 'models')
+const modelsDirectory =
+  process.env.WHISPER_MODELS_DIR ||
+  (existsSync(bundledModelsDirectory) ? bundledModelsDirectory : join(process.cwd(), 'models'))
 let child = null
 let sentenceCallback = null
-let currentModelDirectory = null
+let currentModelPath = null
+let outputBuffer = ''
+let currentLanguage = 'pt-BR'
 
-function isVoskModelDirectory(directory) {
-  return (
-    existsSync(join(directory, 'final.mdl')) ||
-    existsSync(join(directory, 'am', 'final.mdl')) ||
-    existsSync(join(directory, 'model.conf'))
-  )
+function getWhisperBinary() {
+  if (process.env.WHISPER_CPP_BIN) return process.env.WHISPER_CPP_BIN
+  if (existsSync(bundledBinary)) return bundledBinary
+  if (existsSync(developmentBinary)) return developmentBinary
+  return null
 }
 
-/** Lists valid Vosk model folders available beside the application. */
+/** Returns setup data that can be shown before a meeting begins. */
+export function getTranscriberStatus() {
+  const binaryPath = getWhisperBinary()
+  const models = listTranscriptionModels()
+  return {
+    ready: Boolean(binaryPath) && models.length > 0,
+    binaryFound: Boolean(binaryPath),
+    modelsFound: models.length,
+    modelsDirectory
+  }
+}
+
+function isWhisperModel(entry) {
+  return entry.isFile() && /\.(bin|gguf)$/i.test(entry.name)
+}
+
+/** Lists Whisper.cpp model files available in ./models. */
 export function listTranscriptionModels() {
   try {
-    return readdirSync(process.cwd(), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith('vosk-model'))
-      .map((entry) => ({ id: entry.name, label: entry.name }))
-      .filter((model) => isVoskModelDirectory(join(process.cwd(), model.id)))
+    return readdirSync(modelsDirectory, { withFileTypes: true })
+      .filter(isWhisperModel)
+      .map((entry) => ({
+        id: entry.name,
+        label: entry.name.replace(/^ggml-/, '').replace(/\.(bin|gguf)$/i, '')
+      }))
   } catch (error) {
-    console.error(`[Transcriber] Could not list models: ${error.message}`)
-    logRuntimeEvent('transcriber_models_list_failed', { code: error.code, message: error.message })
+    if (error.code !== 'ENOENT') {
+      console.error(`[Transcriber] Could not list Whisper models: ${error.message}`)
+      logRuntimeEvent('transcriber_models_list_failed', {
+        code: error.code,
+        message: error.message
+      })
+    }
     return []
   }
 }
 
-/**
- * Starts the speech recognizer for the requested language.
- * @param {string} language Supported values are pt-BR and en-US.
- */
-export function configureTranscriber(language = 'pt-BR', requestedModel = '') {
-  const falaBrasilDirectory = 'vosk-model-pt-fb-v0.1.1-20220516_2113'
-  const modelDirectory = requestedModel || (language === 'en-US'
-    ? 'vosk-model'
-    : existsSync(join(process.cwd(), falaBrasilDirectory))
-      ? falaBrasilDirectory
-      : 'vosk-model-pt')
+function languageCode(language) {
+  return language === 'en-US' ? 'en' : 'pt'
+}
 
-  if (language === 'pt-BR' && modelDirectory !== falaBrasilDirectory) {
-    console.warn('[Transcriber] FalaBrasil model not found; using the small Portuguese model.')
+function handleChildMessage(line) {
+  try {
+    const message = JSON.parse(line)
+    if (
+      message.type === 'final' &&
+      typeof message.text === 'string' &&
+      message.text.trim() &&
+      sentenceCallback
+    ) {
+      sentenceCallback(message.text.trim())
+    }
+  } catch {
+    console.warn(`[Transcriber] Ignoring malformed Whisper message: ${line}`)
   }
+}
 
-  const modelPath = join(process.cwd(), modelDirectory)
-  if (!existsSync(modelPath)) {
-    console.error(`[Transcriber] Model directory not found: ${modelPath}`)
-    logRuntimeEvent('transcriber_model_missing', { language, modelDirectory, modelPath })
-    child = null
-    currentModelDirectory = null
+/** Starts the bundled Whisper.cpp streaming adapter for the chosen local model. */
+export function configureTranscriber(language = 'pt-BR', requestedModel = '') {
+  currentLanguage = language
+  const models = listTranscriptionModels()
+  const modelFile = requestedModel || models[0]?.id
+  const modelPath = modelFile && join(modelsDirectory, modelFile)
+  const whisperBinary = getWhisperBinary()
+
+  if (!modelPath || !existsSync(modelPath)) {
+    console.error(`[Transcriber] Whisper model not found: ${modelFile || '(none)'}`)
+    logRuntimeEvent('transcriber_model_missing', { language, modelFile, modelsDirectory })
     return false
   }
-
-  if (child && currentModelDirectory === modelDirectory) {
-    return
+  if (!whisperBinary) {
+    console.error('[Transcriber] whisper-stream executable was not found.')
+    logRuntimeEvent('transcriber_binary_missing', { executableName })
+    return false
   }
+  if (child && currentModelPath === modelPath) return true
+  if (child) child.kill()
 
-  if (child) {
-    child.kill()
-  }
-
-  currentModelDirectory = modelDirectory
-  console.log(`[Transcriber] Spawning child process with ${modelDirectory}`)
-  const spawnedChild = spawn('node', [childPath, modelDirectory], {
-    stdio: ['pipe', 'inherit', 'inherit', 'ipc']
+  currentModelPath = modelPath
+  outputBuffer = ''
+  console.log(`[Transcriber] Starting Whisper.cpp with ${modelFile}`)
+  const spawnedChild = spawn(whisperBinary, [modelPath, languageCode(language)], {
+    stdio: ['pipe', 'pipe', 'inherit']
   })
   child = spawnedChild
-
-  spawnedChild.on('message', (msg) => {
-    if (msg && msg.text && typeof sentenceCallback === 'function') {
-      sentenceCallback(msg.text)
-    }
+  spawnedChild.stdout.on('data', (data) => {
+    outputBuffer += data.toString()
+    const lines = outputBuffer.split('\n')
+    outputBuffer = lines.pop() || ''
+    lines.filter(Boolean).forEach(handleChildMessage)
   })
-
   spawnedChild.on('error', (err) => {
-    console.error(`[Transcriber] Child process error: ${err.message}`)
+    console.error(`[Transcriber] Whisper process error: ${err.message}`)
     logRuntimeEvent('transcriber_process_error', { code: err.code, message: err.message })
   })
-
-  // The child can exit while an audio chunk is being delivered (for example
-  // when the Vosk model is missing). Prevent the resulting EPIPE from
-  // becoming an uncaught exception in the Electron main process.
   spawnedChild.stdin.on('error', (err) => {
-    console.error(`[Transcriber] Input stream error: ${err.message}`)
+    console.error(`[Transcriber] Whisper input error: ${err.message}`)
     logRuntimeEvent('transcriber_input_error', { code: err.code, message: err.message })
   })
-
   spawnedChild.on('close', (code) => {
-    console.warn(`[Transcriber] Child process closed with code ${code}`)
-    if (code !== 0) {
-      logRuntimeEvent('transcriber_process_closed', { code, modelDirectory })
-    }
+    if (code !== 0 && code !== null)
+      logRuntimeEvent('transcriber_process_closed', { code, modelFile })
     if (child === spawnedChild) {
       child = null
-      currentModelDirectory = null
+      currentModelPath = null
     }
   })
-
   return true
 }
 
-/**
- * Feeds a chunk of PCM audio data into the child transcriber process.
- * @param {Buffer} data Raw PCM audio buffer.
- * @param {function(string)} onSentence Callback invoked when a complete sentence is recognized.
- */
+/** Feeds 16 kHz signed-16-bit PCM audio to Whisper.cpp. */
 export function processAudioStream(data, onSentence) {
   sentenceCallback = onSentence
-  if (!child) {
-    if (!configureTranscriber('pt-BR')) return
+  if (!child && !configureTranscriber(currentLanguage)) return
+  if (child?.stdin?.writable && !child.stdin.destroyed && !child.stdin.writableEnded)
+    child.stdin.write(data)
+}
+
+/** Stops the local Whisper process and releases the model memory. */
+export function stopTranscriber() {
+  if (child) {
+    child.kill()
+    child = null
   }
-  if (child?.stdin?.writable && !child.stdin.destroyed && !child.stdin.writableEnded) {
-    try {
-      child.stdin.write(data)
-    } catch (err) {
-      if (err.code !== 'EPIPE') {
-        console.error(`[Transcriber] Could not send audio chunk: ${err.message}`)
-      }
-      logRuntimeEvent('transcriber_write_error', { code: err.code, message: err.message })
-    }
-  }
+  currentModelPath = null
+  outputBuffer = ''
+  sentenceCallback = null
 }

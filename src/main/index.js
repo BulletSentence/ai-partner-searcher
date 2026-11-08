@@ -13,7 +13,13 @@ import fs from 'fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { listAudioOutputs, startAudioCapture } from './audioCapture'
-import { configureTranscriber, listTranscriptionModels, processAudioStream } from './transcriber'
+import {
+  configureTranscriber,
+  getTranscriberStatus,
+  listTranscriptionModels,
+  processAudioStream,
+  stopTranscriber
+} from './transcriber'
 import {
   configureAI,
   generateMeetingHelp,
@@ -309,6 +315,7 @@ function handleStopSession() {
     }
     audioCaptureProcess = null
   }
+  stopTranscriber()
 
   if (process.platform === 'darwin' && mainWindow) {
     mainWindow.webContents.send('stop-native-audio-capture')
@@ -389,6 +396,7 @@ ipcMain.handle('prepare-knowledge-sources', async (_event, data) => {
 
 ipcMain.handle('get-audio-outputs', () => listAudioOutputs())
 ipcMain.handle('get-transcription-models', () => listTranscriptionModels())
+ipcMain.handle('get-transcriber-status', () => getTranscriberStatus())
 
 ipcMain.on('native-audio-chunk', (_event, chunk) => {
   if (process.platform === 'darwin' && currentMeetingData && currentAudioSource === 'system') {

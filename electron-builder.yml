@@ -10,6 +10,15 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
 asarUnpack:
   - resources/**
+extraResources:
+  - from: bin
+    to: bin
+    filter:
+      - whisper-stream*
+  - from: models
+    to: models
+    filter:
+      - '**/*'
 win:
   executableName: ai-assistant
 nsis:
