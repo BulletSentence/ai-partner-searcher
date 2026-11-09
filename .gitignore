@@ -10,5 +10,7 @@ bin/whisper-stream
 bin/whisper-stream.exe
 models/*.bin
 models/*.gguf
+vosk-model-pt/
+vosk-model-pt-*/
 meetings/
 logs/
