@@ -14,7 +14,11 @@ export function configureTerminology(entries = []) {
     .filter((entry) => typeof entry?.canonical === 'string')
     .map(({ canonical, aliases = [] }) => ({
       canonical: canonical.trim(),
-      aliases: [...new Set([canonical, ...aliases].filter((alias) => typeof alias === 'string' && alias.trim()))]
+      aliases: [
+        ...new Set(
+          [canonical, ...aliases].filter((alias) => typeof alias === 'string' && alias.trim())
+        )
+      ]
     }))
     .filter((entry) => entry.canonical)
 
@@ -41,7 +45,10 @@ export async function loadTerminologyFile() {
 export function correctTerminology(text = '') {
   let corrected = text
   for (const { canonical, alias } of replacements) {
-    const expression = new RegExp(`(^|[^\\p{L}\\p{N}])(${escapeRegex(alias)})(?=$|[^\\p{L}\\p{N}])`, 'giu')
+    const expression = new RegExp(
+      `(^|[^\\p{L}\\p{N}])(${escapeRegex(alias)})(?=$|[^\\p{L}\\p{N}])`,
+      'giu'
+    )
     corrected = corrected.replace(expression, (_match, prefix) => `${prefix}${canonical}`)
   }
   return corrected

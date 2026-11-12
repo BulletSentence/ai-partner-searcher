@@ -2,7 +2,7 @@
 //
 // Live mode (default)
 //   Input (stdin): framed PCM. Each frame is [1 byte channel][4 bytes little-endian payload size]
-//   followed by 16 kHz mono signed-16-bit samples. Channel 0 is the system audio (the client),
+//   followed by 16 kHz mono signed-16-bit samples. Channel 0 is the system audio (the other participants),
 //   channel 1 is the microphone (the meeting owner).
 //   Output (stdout), one JSON object per line:
 //     {"type":"ready","vad":"silero"}

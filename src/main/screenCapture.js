@@ -22,7 +22,9 @@ export async function captureScreenAndExtractText() {
     const dataUrl = primarySource.thumbnail.toDataURL()
 
     // 3. Run Tesseract OCR on the data URL image
-    const { data: { text } } = await Tesseract.recognize(dataUrl, 'eng')
+    const {
+      data: { text }
+    } = await Tesseract.recognize(dataUrl, 'eng')
 
     return text ? text.trim() : ''
   } catch (err) {

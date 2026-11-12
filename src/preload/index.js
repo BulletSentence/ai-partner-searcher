@@ -3,6 +3,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 // Custom APIs for renderer
 const api = {
+  exportFinalTranscript: (data) => ipcRenderer.invoke('export-final-transcript', data),
   isMac: process.platform === 'darwin',
   onTranscription: (callback) => ipcRenderer.on('on-transcription', (_event, value) => callback(value)),
   onTranscriptionPartial: (callback) =>
@@ -19,6 +20,8 @@ const api = {
   startMeeting: (data) => ipcRenderer.send('start-meeting', data),
   stopMeeting: () => ipcRenderer.send('stop-meeting'),
   askMeetingQuestion: (question) => ipcRenderer.send('ask-meeting-question', question),
+  setAutoAnswer: (enabled) => ipcRenderer.send('set-auto-answer', enabled),
+  setTranscriptCollapsed: (collapsed) => ipcRenderer.send('set-transcript-collapsed', collapsed),
   retryLastMeetingQuestion: () => ipcRenderer.send('retry-last-meeting-question'),
   setKnowledgeSourceFilter: (source) => ipcRenderer.send('set-knowledge-source-filter', source),
   minimize: () => ipcRenderer.send('minimize-window'),

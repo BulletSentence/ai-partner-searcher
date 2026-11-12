@@ -3,9 +3,9 @@ import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
 import { formatClock, runFfmpeg, speakerLabel } from './meetingRecorder.js'
-import { isEchoOfClient, isUsableTranscript } from './transcriptFilter.js'
+import { isEchoOfOthers, isUsableTranscript } from './transcriptFilter.js'
 
-const TRACK_FILES = { client: 'audio-cliente.wav', me: 'audio-eu.wav' }
+const TRACK_FILES = { others: 'audio-participantes.wav', me: 'audio-eu.wav' }
 const PARAGRAPH_GAP_MS = 2_000
 const PARAGRAPH_MAX_CHARS = 700
 export const FINAL_TRANSCRIPT_FILE = 'transcricao-final.md'
@@ -26,7 +26,7 @@ export function locateRecordingTracks(folder) {
   if (wavTracks.length) return wavTracks
 
   if (!fs.existsSync(join(folder, 'audio.m4a'))) return []
-  const speakers = readMeetingSummary(folder)?.audio?.[0]?.speakers || ['client', 'me']
+  const speakers = readMeetingSummary(folder)?.audio?.[0]?.speakers || ['others', 'me']
   return speakers.map((speaker, index) => ({
     speaker,
     file: 'audio.m4a',
@@ -126,9 +126,9 @@ export function buildFinalTranscript(
       if (usable) entries.push({ speaker, text, startMs: segment.t0, endMs: segment.t1 })
     }
   }
-  const clientEntries = entries.filter((entry) => entry.speaker === 'client')
+  const otherEntries = entries.filter((entry) => entry.speaker !== 'me')
   const ordered = entries
-    .filter((entry) => entry.speaker !== 'me' || !isEchoOfClient(entry, clientEntries))
+    .filter((entry) => entry.speaker !== 'me' || !isEchoOfOthers(entry, otherEntries))
     .sort((first, second) => first.startMs - second.startMs)
 
   const paragraphs = []

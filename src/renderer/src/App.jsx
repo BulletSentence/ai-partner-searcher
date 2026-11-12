@@ -8,16 +8,22 @@ function App() {
   // Form State
   const [formData, setFormData] = useState({
     meetingContext: '',
+    harnessPath: '',
     projectPaths: '',
     obsidianVaultPath: '',
     audioOutputDevice: '',
     transcriberModel: '',
     language: 'pt-BR',
     useOllama: false,
-    openaiModel: 'gpt-6-luna'
+    openaiModel: 'gpt-6-luna',
+    autoAnswer: true,
+    showLivePreview: false,
+    transcriptCollapsed: true
   })
 
   // History Log States
+  const [exportStatus, setExportStatus] = useState({})
+  const [exportNotice, setExportNotice] = useState(null)
   const [savedSessions, setSavedSessions] = useState([])
   const [selectedSession, setSelectedSession] = useState(null)
   const [indexStatus, setIndexStatus] = useState(null)
@@ -174,7 +180,7 @@ function App() {
   // Saved setup values take precedence over defaults supplied through .env.
   useEffect(() => {
     Promise.all([window.api.getDefaultMeetingProfile(), window.api.getMeetingSettings()])
-      .then(([profile, settings]) => setFormData((current) => ({ ...current, ...profile, ...settings })))
+      .then(([profile, settings]) => setFormData((current) => ({ ...current, ...profile, ...settings, showLivePreview: false, transcriptCollapsed: true })))
       .catch((err) => console.error('Error loading meeting settings:', err))
       .finally(() => setHasLoadedSettings(true))
   }, [])
@@ -312,7 +318,10 @@ function App() {
       const status = await window.api.prepareKnowledgeSources(formData)
       setIndexStatus(status)
       setSourceFilter('all')
-      window.api.startMeeting(formData)
+      const meetingData = { ...formData, showLivePreview: false, transcriptCollapsed: true }
+      setFormData(meetingData)
+      window.api.startMeeting(meetingData)
+      window.api.setTranscriptCollapsed(true)
       setIsSetupComplete(true)
     } catch (error) {
       console.error('Error preparing local knowledge sources:', error)
@@ -375,6 +384,34 @@ function App() {
     const result = await window.api.selectFolders(false)
     if (!result?.canceled) {
       setFormData((current) => ({ ...current, obsidianVaultPath: result.filePaths[0] || '' }))
+    }
+  }
+
+  const handleExportToHarness = async (session) => {
+    const folder = session.folder
+    setExportStatus((current) => ({ ...current, [folder]: { busy: true } }))
+    setExportNotice({ text: 'Preparando exportação…' })
+    try {
+      let destination = formData.harnessPath
+      if (!destination) {
+        setExportNotice({ text: 'Selecione a pasta de destino do Harness na janela aberta.' })
+        const selection = await window.api.selectFolders(false)
+        destination = selection?.filePaths?.[0]
+        if (selection?.canceled || !destination) {
+          setExportNotice({ text: 'Exportação cancelada. Nenhum arquivo foi salvo.' })
+          return
+        }
+        setFormData((current) => ({ ...current, harnessPath: destination }))
+      }
+      setExportNotice({ text: 'Salvando transcrição final no Harness…' })
+      const result = await window.api.exportFinalTranscript({ folder, destination })
+      if (result?.error) throw new Error(result.error)
+      if (!result?.path) throw new Error('O aplicativo não confirmou o arquivo salvo.')
+      setExportNotice({ text: `Transcrição enviada para: ${result.path}` })
+    } catch (error) {
+      setExportNotice({ error: true, text: `Não foi possível exportar: ${error.message}` })
+    } finally {
+      setExportStatus((current) => ({ ...current, [folder]: { busy: false } }))
     }
   }
 
@@ -501,6 +538,7 @@ function App() {
         `}</style>
 
         <div
+          className="setup-topbar"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -755,7 +793,7 @@ function App() {
             🛸 Configuração do Copilot
           </h2>
           <p style={{ margin: '0 0 20px 0', fontSize: '0.9rem', color: '#64748b' }}>
-            Prepare o contexto, os projetos e o vault antes de entrar na reunião.
+            Descreva a conversa e escolha as fontes locais que poderão ajudar nas respostas.
           </p>
 
           <div className="setup-form-columns" style={{ display: 'flex', gap: '30px' }}>
@@ -768,7 +806,7 @@ function App() {
                 <textarea
                   value={formData.meetingContext}
                   onChange={(e) => setFormData({ ...formData, meetingContext: e.target.value })}
-                  placeholder="Cliente, objetivo, pauta, produtos e pontos importantes..."
+                  placeholder="Ex.: daily da equipe, alinhamento técnico ou conversa com cliente; pauta e termos importantes..."
                   style={{ ...inputStyle, height: '88px', resize: 'none' }}
                   onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
                   onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
@@ -779,14 +817,7 @@ function App() {
                   Projetos para consultar
                 </label>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <input
-                    type="text"
-                    value={formData.projectPaths}
-                    readOnly
-                    placeholder="Nenhuma pasta selecionada (opcional)"
-                    title={formData.projectPaths || 'Nenhuma pasta selecionada'}
-                    style={{ ...inputStyle, flex: 1, cursor: 'default' }}
-                  />
+
                   <button type="button" onClick={selectProjectFolders} style={folderButtonStyle}>
                     Buscar pastas
                   </button>
@@ -800,22 +831,16 @@ function App() {
                   </button>
                 </div>
                 <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                  Selecione 0, 1 ou 2 pastas de projeto.
+                  {formData.projectPaths ? `${formData.projectPaths.split('\n').filter(Boolean).length} projeto(s) selecionado(s):` : 'Nenhum projeto selecionado. Opcional: escolha até duas pastas.'}
                 </span>
+                {formData.projectPaths.split('\n').filter(Boolean).map((path) => <div key={path} className="source-path" title={path}>{path}</div>)}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
                   Vault do Obsidian
                 </label>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <input
-                    type="text"
-                    value={formData.obsidianVaultPath}
-                    readOnly
-                    placeholder="Nenhuma pasta selecionada (opcional)"
-                    title={formData.obsidianVaultPath || 'Nenhuma pasta selecionada'}
-                    style={{ ...inputStyle, flex: 1, cursor: 'default' }}
-                  />
+
                   <button type="button" onClick={selectObsidianFolder} style={folderButtonStyle}>
                     Buscar pasta
                   </button>
@@ -829,8 +854,18 @@ function App() {
                   </button>
                 </div>
                 <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                  Selecione uma pasta do vault do Obsidian.
+                  {formData.obsidianVaultPath ? 'Vault selecionado:' : 'Nenhum vault selecionado (opcional).'}
                 </span>
+                {formData.obsidianVaultPath && <div className="source-path" title={formData.obsidianVaultPath}>{formData.obsidianVaultPath}</div>}
+              </div>
+              <div className="harness-destination">
+                <label style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Destino das transcrições no Harness</label>
+                <button type="button" style={folderButtonStyle} onClick={async () => {
+                  const result = await window.api.selectFolders(false)
+                  if (!result?.canceled) setFormData((current) => ({ ...current, harnessPath: result.filePaths[0] || '' }))
+                }}>Selecionar pasta</button>
+                <div className="source-path">{formData.harnessPath || 'Selecione a pasta para exportar as transcrições finais.'}</div>
+                <small style={{ color: '#94a3b8' }}>Se houver uma subpasta HARNESS, o Markdown será salvo dentro dela.</small>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
@@ -1000,6 +1035,11 @@ function App() {
           >
             📂 Histórico de sessões salvas
           </h4>
+          {exportNotice && (
+            <div role={exportNotice.error ? 'alert' : 'status'} style={{ padding: '10px', marginBottom: '10px', borderRadius: '8px', background: 'rgba(255,255,255,0.06)', color: exportNotice.error ? '#f87171' : '#86efac', fontSize: '0.8rem', overflowWrap: 'anywhere', userSelect: 'text' }}>
+              {exportNotice.text}
+            </div>
+          )}
           {savedMeetingFolder && (
             <button
               onClick={() => window.api.openMeetingFolder(savedMeetingFolder)}
@@ -1045,7 +1085,10 @@ function App() {
               savedSessions.map((session, index) => (
                 <div
                   key={index}
-                  onClick={() => setSelectedSession(session)}
+                  onClick={(event) => {
+                    if (event.target.closest('button, input, a, [data-session-action]')) return
+                    setSelectedSession(session)
+                  }}
                   style={{
                     flexShrink: 0,
                     width: '230px',
@@ -1084,6 +1127,17 @@ function App() {
                   >
                     {session.data.meeting?.obsidianVaultPath || 'Sem vault configurado'}
                   </div>
+                  {session.folder && Array.isArray(session.data.finalTranscript) && (
+                    <div data-session-action onClick={(event) => event.stopPropagation()}>
+                      <button type="button" style={{ ...folderButtonStyle, marginTop: '8px' }}
+                        disabled={exportStatus[session.folder]?.busy}
+                        title={formData.harnessPath || 'Clique para selecionar o destino do Harness'}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleExportToHarness(session)
+                        }}>{exportStatus[session.folder]?.busy ? 'Salvando…' : 'Enviar para o Harness'}</button>
+                    </div>
+                  )}
                   <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '6px' }}>
                     {new Date(session.data.timestamp).toLocaleDateString('pt-BR')} às{' '}
                     {new Date(session.data.timestamp).toLocaleTimeString('pt-BR', {
@@ -1131,15 +1185,15 @@ function App() {
 
   return (
     <div
-      className="app-shell hud-shell"
+      className={`app-shell hud-shell${formData.transcriptCollapsed ? ' transcript-collapsed' : ''}`}
       style={{
         width: 'min(860px, 100%)',
         maxWidth: '860px',
         height: '600px',
         display: 'flex',
         flexDirection: 'column',
-        background: 'rgba(15, 15, 20, 0.82)',
-        backdropFilter: 'blur(25px)',
+        background: 'rgba(15, 15, 20, 0.72)',
+        backdropFilter: 'blur(18px)',
         borderRadius: '28px',
         border: '1px solid rgba(255, 255, 255, 0.08)',
         color: '#ffffff',
@@ -1358,6 +1412,24 @@ function App() {
         </div>
       </div>
 
+      <div className="hud-options">
+        <button type="button" onClick={() => {
+          const collapsed = !formData.transcriptCollapsed
+          setFormData((current) => ({ ...current, transcriptCollapsed: collapsed }))
+          window.api.setTranscriptCollapsed(collapsed)
+        }} aria-expanded={!formData.transcriptCollapsed}>
+          {formData.transcriptCollapsed ? 'Mostrar transcrição' : 'Ocultar transcrição'}
+        </button>
+        <label><input type="checkbox" checked={formData.showLivePreview} onChange={(e) => setFormData((current) => ({ ...current, showLivePreview: e.target.checked }))} /> Debug: fala em andamento</label>
+        <label><input type="checkbox" checked={formData.autoAnswer} onChange={(e) => {
+          const enabled = e.target.checked
+          setFormData((current) => ({ ...current, autoAnswer: enabled }))
+          window.api.setAutoAnswer(enabled)
+          if (!enabled) { setIsAnswerStreaming(false); setAnswerStatus('Respostas automáticas desativadas') }
+          else setAnswerStatus('Ouvindo')
+        }} /> Respostas automáticas</label>
+      </div>
+
       {/* Main HUD Dashboard */}
       <div
         className="hud-dashboard"
@@ -1371,7 +1443,7 @@ function App() {
         }}
       >
         {/* Left Column: Live Audio Transcription History */}
-        <div
+        {!formData.transcriptCollapsed && <div
           className="hud-panel"
           style={{
             flex: 1,
@@ -1508,7 +1580,7 @@ function App() {
                 {entry.text}
               </div>
             ))}
-            {transcription && (
+            {formData.showLivePreview && transcription && (
               <div
                 style={{
                   fontSize: '1.05rem',
@@ -1522,7 +1594,7 @@ function App() {
             )}
             <div ref={transcriptEndRef} />
           </div>
-        </div>
+        </div>}
 
         {/* Right Column: AI Copilot Assistant Suggestions */}
         <div
@@ -1722,9 +1794,7 @@ function App() {
                   lineHeight: '1.6'
                 }}
               >
-                Ouvindo o áudio da reunião...
-                <br />
-                As respostas sugeridas aparecerão aqui.
+                {formData.autoAnswer ? 'Ouvindo o áudio da reunião. As respostas sugeridas aparecerão aqui.' : 'Respostas automáticas desativadas. Você ainda pode fazer uma pergunta manual.'}
               </div>
             )}
           </div>

@@ -5,13 +5,17 @@ import { join } from 'path'
 const settingsFileName = 'meeting-settings.json'
 const allowedFields = [
   'meetingContext',
+  'harnessPath',
   'projectPaths',
   'obsidianVaultPath',
   'audioOutputDevice',
   'transcriberModel',
   'language',
   'useOllama',
-  'openaiModel'
+  'openaiModel',
+  'autoAnswer',
+  'showLivePreview',
+  'transcriptCollapsed'
 ]
 
 function getSettingsPath() {
@@ -28,7 +32,8 @@ export async function getMeetingSettings() {
   try {
     return selectAllowedSettings(JSON.parse(await fs.readFile(getSettingsPath(), 'utf8')))
   } catch (error) {
-    if (error.code !== 'ENOENT') console.warn(`[Settings] Could not read meeting settings: ${error.message}`)
+    if (error.code !== 'ENOENT')
+      console.warn(`[Settings] Could not read meeting settings: ${error.message}`)
     return {}
   }
 }

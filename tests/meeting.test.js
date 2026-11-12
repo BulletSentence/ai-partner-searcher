@@ -6,7 +6,7 @@ import test from 'node:test'
 import { buildFinalTranscript } from '../src/main/finalTranscription.js'
 import { createMeetingRecorder, listSavedMeetings } from '../src/main/meetingRecorder.js'
 import { isLikelyQuestion } from '../src/main/questionDetector.js'
-import { isEchoOfClient, isUsableTranscript } from '../src/main/transcriptFilter.js'
+import { isEchoOfOthers, isUsableTranscript } from '../src/main/transcriptFilter.js'
 
 test('records audio and transcript of a meeting into its own folder', async (t) => {
   const baseDir = await mkdtemp(join(tmpdir(), 'meeting-copilot-recorder-'))
@@ -23,7 +23,7 @@ test('records audio and transcript of a meeting into its own folder', async (t) 
     baseDir,
     meeting: { meetingContext: 'Reunião FIDC Rubicon 2' }
   })
-  recorder.writeAudio('client', Buffer.alloc(32_000, 1))
+  recorder.writeAudio('others', Buffer.alloc(32_000, 1))
   recorder.writeAudio('me', Buffer.alloc(16_000, 1))
   recorder.addUtterance({
     speaker: 'me',
@@ -32,7 +32,7 @@ test('records audio and transcript of a meeting into its own folder', async (t) 
     endMs: 6_000
   })
   recorder.addUtterance({
-    speaker: 'client',
+    speaker: 'others',
     text: 'Como funciona a autenticação?',
     startMs: 1_000,
     endMs: 3_000
@@ -49,7 +49,7 @@ test('records audio and transcript of a meeting into its own folder', async (t) 
 
   const files = await readdir(folder)
   assert.deepEqual(files.sort(), [
-    'audio-cliente.wav',
+    'audio-participantes.wav',
     'audio-eu.wav',
     'reuniao.json',
     'transcricao.jsonl',
@@ -57,14 +57,16 @@ test('records audio and transcript of a meeting into its own folder', async (t) 
   ])
   assert.match(folder, /_reuniao-fidc-rubicon-2$/)
 
-  const clientWav = await readFile(join(folder, 'audio-cliente.wav'))
+  const othersWav = await readFile(join(folder, 'audio-participantes.wav'))
   const ownerWav = await readFile(join(folder, 'audio-eu.wav'))
-  assert.equal(clientWav.toString('ascii', 0, 4), 'RIFF')
-  assert.equal(clientWav.readUInt32LE(40), clientWav.length - 44)
-  assert.equal(clientWav.length, ownerWav.length, 'both tracks are padded to the same duration')
+  assert.equal(othersWav.toString('ascii', 0, 4), 'RIFF')
+  assert.equal(othersWav.readUInt32LE(40), othersWav.length - 44)
+  assert.equal(othersWav.length, ownerWav.length, 'both tracks are padded to the same duration')
 
   const markdown = await readFile(join(folder, 'transcricao.md'), 'utf8')
-  assert.ok(markdown.indexOf('Cliente:** Como funciona') < markdown.indexOf('Eu:** Usamos token'))
+  assert.ok(
+    markdown.indexOf('Participantes:** Como funciona') < markdown.indexOf('Eu:** Usamos token')
+  )
   assert.match(markdown, /Com token Bearer\./)
 
   const [saved] = await listSavedMeetings(baseDir)
@@ -73,7 +75,7 @@ test('records audio and transcript of a meeting into its own folder', async (t) 
   assert.equal(saved.data.meeting.context, 'Reunião FIDC Rubicon 2')
 })
 
-test('answers real client questions but not small talk', () => {
+test('answers real questions but not small talk', () => {
   assert.equal(
     isLikelyQuestion('Outra dúvida, quando a averbação não reflete, o webhook é reenviado?'),
     true
@@ -85,7 +87,7 @@ test('answers real client questions but not small talk', () => {
   assert.equal(isLikelyQuestion('Bom dia, tudo bem? Como funciona a cessão para o fundo?'), true)
 })
 
-test('drops Whisper hallucinations and microphone echo of the client', () => {
+test('drops Whisper hallucinations and microphone echo of the call', () => {
   assert.equal(isUsableTranscript('Legendas pela comunidade Amara.org'), false)
   assert.equal(isUsableTranscript('Como funciona a API?', { noSpeechProbability: 0.9 }), false)
   assert.equal(isUsableTranscript('Termos usados: Credifit, FIDC, Dataprev.'), false)
@@ -101,14 +103,14 @@ test('drops Whisper hallucinations and microphone echo of the client', () => {
     { text: 'Como funciona a autenticação na API externa?', startMs: 8_000, endMs: 12_000 }
   ]
   assert.equal(
-    isEchoOfClient(
+    isEchoOfOthers(
       { text: 'como funciona a autenticação na API externa', startMs: 8_200, endMs: 12_100 },
       client
     ),
     true
   )
   assert.equal(
-    isEchoOfClient(
+    isEchoOfOthers(
       { text: 'A gente usa token Bearer com validade de uma hora.', startMs: 9_000, endMs: 13_000 },
       client
     ),
@@ -119,7 +121,7 @@ test('drops Whisper hallucinations and microphone echo of the client', () => {
 test('builds the final transcript from the segments of each recorded side', () => {
   const transcript = buildFinalTranscript(
     {
-      client: [
+      others: [
         { t0: 0, t1: 4_000, text: 'Bom dia, vamos falar do fundo.', p: 0.93, nsp: 0 },
         { t0: 4_500, t1: 9_000, text: 'Como funciona a sessão dos contratos?', p: 0.95, nsp: 0 },
         { t0: 30_000, t1: 38_000, text: '...', p: 0.32, nsp: 0 }
@@ -135,7 +137,7 @@ test('builds the final transcript from the segments of each recorded side', () =
   assert.deepEqual(
     transcript.map(({ speaker, text }) => [speaker, text]),
     [
-      ['client', 'Bom dia, vamos falar do fundo. Como funciona a cessão de contratos?'],
+      ['others', 'Bom dia, vamos falar do fundo. Como funciona a cessão de contratos?'],
       ['me', 'A cessão acontece todo dia útil.']
     ]
   )

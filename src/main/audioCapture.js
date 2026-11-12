@@ -12,7 +12,15 @@ export async function listAudioOutputs() {
 
   if (process.platform === 'win32') {
     try {
-      await execFileAsync('ffmpeg', ['-hide_banner', '-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'])
+      await execFileAsync('ffmpeg', [
+        '-hide_banner',
+        '-list_devices',
+        'true',
+        '-f',
+        'dshow',
+        '-i',
+        'dummy'
+      ])
     } catch (error) {
       const output = `${error.stderr || ''}`
       return [...output.matchAll(/"([^"]+)"\s+\(audio\)/g)].map(([, label]) => ({
@@ -78,14 +86,20 @@ export function startAudioCapture(onAudioChunk, source = 'system', outputDevice 
       ? ['-f', 'dshow', '-i', `audio=${outputDevice}`]
       : ['-f', 'wasapi', '-i', 'default']
     args.push('-ar', '16000', '-ac', '1', '-f', 's16le', '-loglevel', 'warning', 'pipe:1')
-    console.log(`[Audio Capture] Spawning ffmpeg on Windows audio device: ${outputDevice || 'default'}`)
+    console.log(
+      `[Audio Capture] Spawning ffmpeg on Windows audio device: ${outputDevice || 'default'}`
+    )
     const child = spawn('ffmpeg', args)
     attachAudioListeners(child, onAudioChunk, source)
     return child
   }
 
   const device =
-    source === 'mic' ? '@DEFAULT_SOURCE@' : outputDevice ? `${outputDevice}.monitor` : '@DEFAULT_SINK@.monitor'
+    source === 'mic'
+      ? '@DEFAULT_SOURCE@'
+      : outputDevice
+        ? `${outputDevice}.monitor`
+        : '@DEFAULT_SINK@.monitor'
   const args = ['-d', device, '--rate=16000', '--channels=1', '--format=s16le']
 
   console.log(`[Audio Capture] Spawning parec on device: ${device}`)

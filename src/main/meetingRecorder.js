@@ -6,7 +6,8 @@ const SAMPLE_RATE = 16_000
 const BYTES_PER_MS = (SAMPLE_RATE * 2) / 1000
 const WAV_HEADER_BYTES = 44
 const SPEAKERS = {
-  client: { label: 'Cliente', file: 'audio-cliente.wav' },
+  // Everyone heard through the system audio: clients, teammates, whoever else is on the call.
+  others: { label: 'Participantes', file: 'audio-participantes.wav' },
   me: { label: 'Eu', file: 'audio-eu.wav' },
   manual: { label: 'Pergunta manual' },
   screen: { label: 'Tela' }
@@ -14,6 +15,8 @@ const SPEAKERS = {
 
 /** Human label for a speaker id, shared by the live view and the saved transcript. */
 export function speakerLabel(speaker) {
+  // 'client' is how earlier recordings named the other participants.
+  if (speaker === 'client') return SPEAKERS.others.label
   return SPEAKERS[speaker]?.label || 'Participante'
 }
 
@@ -176,7 +179,7 @@ export function createMeetingRecorder({ baseDir, meeting = {}, startedAt = new D
         if (converted && fs.existsSync(output) && fs.statSync(output).size > 0) {
           const description =
             audioFiles.length === 2
-              ? 'canal esquerdo: cliente; canal direito: você'
+              ? 'canal esquerdo: participantes; canal direito: você'
               : audioFiles[0].description
           audioFiles.forEach(({ path }) => fs.rmSync(path, { force: true }))
           audioFiles = [

@@ -164,11 +164,11 @@ function buildSearchIndex(chunks) {
  * Builds an in-memory index for the Obsidian vault and the local project folders.
  * No file content leaves the process at this stage.
  */
-export async function indexKnowledgeSources({ projectPaths = '', obsidianVaultPath = '' } = {}) {
+export async function indexKnowledgeSources({ projectPaths = '', obsidianVaultPath = '', harnessPath = '' } = {}) {
   // The vault goes first: it holds the curated answers, the projects hold the details.
   const locations = [
     ...new Set(
-      [obsidianVaultPath, ...projectPaths.split(/[\n,]/)].map((path) => path.trim()).filter(Boolean)
+      [obsidianVaultPath, harnessPath, ...projectPaths.split(/[\n,]/)].map((path) => path.trim()).filter(Boolean)
     )
   ]
   const chunks = []

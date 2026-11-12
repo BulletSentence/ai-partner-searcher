@@ -129,3 +129,19 @@ O áudio e o `transcricao.jsonl` são gravados durante a reunião; se o app fech
 ## Privacidade
 
 A transcrição, a gravação e a indexação são locais. As reuniões gravadas contêm a voz de outras pessoas: avise os participantes e siga a política da empresa antes de gravar. Ao usar um provedor de IA em nuvem, a pergunta atual e os trechos locais selecionados para respondê-la podem ser enviados ao provedor. Não configure fontes com dados sensíveis sem autorização.
+
+### Busca no Harness
+
+As respostas tentam MCP do Obsidian, MCP do Omnisearch e REST em paralelo,
+aceitando o primeiro resultado útil. O orçamento total dessas tentativas é de
+850 ms; falha, ausência de resultados ou timeout retorna ao índice local.
+Integrações com falha ficam 30 segundos sem novas tentativas. Uma nova pergunta
+cancela a busca anterior. A pasta de Harness selecionada também entra no índice local.
+
+O app reutiliza as configurações `obsidian` e `obsidian-omnisearch` de
+`~/.codex/config.toml` somente quando `obsidian-fs` identifica o mesmo vault
+selecionado. A REST usa o plugin Local REST API do vault selecionado quando seu
+servidor HTTP local está habilitado. As credenciais ficam no processo principal.
+Para uma instalação diferente, configure `HARNESS_MCP_URL`, `HARNESS_REST_URL`
+e `HARNESS_API_KEY` no `.env`. Os endpoints devem servir o vault selecionado.
+Nenhuma dessas integrações é obrigatória para a busca local funcionar.

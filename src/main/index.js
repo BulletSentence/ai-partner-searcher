@@ -13,7 +13,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { listAudioOutputs, startAudioCapture } from './audioCapture'
 import {
-  CHANNEL_CLIENT,
+  CHANNEL_OTHERS,
   CHANNEL_ME,
   buildWhisperPrompt,
   configureTranscriber,
@@ -35,19 +35,25 @@ import {
 } from './aiService'
 import { captureScreenAndExtractText } from './screenCapture'
 import { createMeetingRecorder, listSavedMeetings, speakerLabel } from './meetingRecorder'
-import { isEchoOfClient, isUsableTranscript } from './transcriptFilter'
+import { isEchoOfOthers, isUsableTranscript } from './transcriptFilter'
 import { transcribeRecording } from './finalTranscription'
 import { readFile } from 'fs/promises'
+import { exportFinalTranscript } from './harnessExport'
+import { loadHarnessSearchConfig, searchHarness } from './harnessSearch'
 import { findRelevantContext, indexKnowledgeSources } from './contextService'
 import { isLikelyQuestion } from './questionDetector'
 import { logRuntimeEvent } from './runtimeLogger'
 import { getMeetingSettings, saveMeetingSettings } from './meetingSettings'
-import { correctTerminology, getCanonicalTerminology, loadTerminologyFile } from './terminologyService'
+import {
+  correctTerminology,
+  getCanonicalTerminology,
+  loadTerminologyFile
+} from './terminologyService'
 
 let mainWindow = null
 
 const meetingsDirectory = process.env.MEETINGS_DIR || join(process.cwd(), 'meetings')
-// A microphone utterance waits this long so a matching client utterance can expose it as speaker echo.
+// A microphone utterance waits this long so a matching utterance from the call can expose it as speaker echo.
 const MIC_ECHO_HOLD_MS = 2_500
 const RECENT_UTTERANCES = 30
 const CONTEXT_UTTERANCES = 6
@@ -60,9 +66,12 @@ let meetingRecorder = null
 let stopPromise = null
 let isQuitting = false
 let finalTranscriptionJob = null
+// Suggested answers cost tokens; the owner can switch the automatic ones off.
+let autoAnswerEnabled = true
 
 // Session state variables
 let currentMeetingData = null
+let harnessSearchConfig = null
 let audioCaptureProcess = null
 let answerRequestId = 0
 let activeAnswerController = null
@@ -82,7 +91,8 @@ async function startFinalTranscription(folder) {
   finalTranscriptionJob?.controller.abort()
   const controller = new AbortController()
   finalTranscriptionJob = { folder, controller }
-  const report = (state, extra = {}) => sendToWindow('final-transcript-status', { folder, state, ...extra })
+  const report = (state, extra = {}) =>
+    sendToWindow('final-transcript-status', { folder, state, ...extra })
 
   try {
     let summary = null
@@ -150,7 +160,7 @@ function describeRecentConversation(questionText) {
   return text.slice(-CONTEXT_MAX_CHARS)
 }
 
-function generateMeetingAnswer(questionText) {
+async function generateMeetingAnswer(questionText) {
   activeAnswerController?.abort()
   const controller = new AbortController()
   activeAnswerController = controller
@@ -158,10 +168,23 @@ function generateMeetingAnswer(questionText) {
   lastMeetingQuestion = questionText
   const startedAt = Date.now()
   const recentConversation = describeRecentConversation(questionText)
-  const excerpts = findRelevantContext(questionText, {
+  const localExcerpts = findRelevantContext(questionText, {
     source: activeSourceFilter,
     context: recentConversation
   })
+  sendToWindow('on-ai-answer-start', { status: 'Buscando no Harness e na base local…' })
+  const config = harnessSearchConfig
+  const remoteExcerpts =
+    activeSourceFilter === 'all' ||
+    activeSourceFilter === config?.vault ||
+    activeSourceFilter === config?.selected
+      ? await searchHarness(questionText, { config, signal: controller.signal })
+      : []
+  if (controller.signal.aborted || requestId !== answerRequestId) return
+  const excerpts = [
+    ...remoteExcerpts,
+    ...localExcerpts.filter((local) => !remoteExcerpts.some((remote) => remote.path === local.path))
+  ].slice(0, 4)
   logRuntimeEvent('answer_requested', {
     localExcerptCount: excerpts.length,
     sourceFilter: activeSourceFilter
@@ -169,10 +192,6 @@ function generateMeetingAnswer(questionText) {
   const searchMs = Date.now() - startedAt
   let firstTokenMs = null
   const sources = excerpts.map((excerpt) => excerpt.path)
-
-  if (mainWindow) {
-    mainWindow.webContents.send('on-ai-answer-start', { status: 'Buscando na base local…' })
-  }
 
   generateMeetingHelp(
     questionText,
@@ -246,7 +265,7 @@ function createWindow() {
     }
   })
 
-  mainWindow.setContentProtection(true)
+  mainWindow.setContentProtection(false)
 
   if (process.platform === 'darwin') {
     session.defaultSession.setDisplayMediaRequestHandler(
@@ -348,7 +367,7 @@ function meetingElapsedMs() {
   return meetingRecorder ? Date.now() - meetingRecorder.startedAt.getTime() : 0
 }
 
-/** Saves an utterance, shows it, and asks the AI when the client asked something. */
+/** Saves an utterance, shows it, and asks the AI when another participant asked something. */
 function commitUtterance(entry) {
   meetingRecorder?.addUtterance(entry)
   recentUtterances.push(entry)
@@ -360,18 +379,24 @@ function commitUtterance(entry) {
     text: entry.text
   })
 
-  // Only the client's questions are answered automatically. The owner's own speech is answered
+  // Only questions from the other participants are answered automatically, and only while
+  // suggested answers are switched on. The owner's own speech is answered
   // only while "Perguntar" is active, when everything said to the microphone is a request.
-  const isOwnerRequest = entry.speaker === 'me' && currentAudioSource === 'mic' && entry.text.length >= 8
-  if (!stopPromise && (isOwnerRequest || (entry.speaker === 'client' && isLikelyQuestion(entry.text)))) {
+  const isOwnerRequest =
+    entry.speaker === 'me' && currentAudioSource === 'mic' && entry.text.length >= 8
+  if (
+    !stopPromise &&
+    (isOwnerRequest ||
+      (autoAnswerEnabled && entry.speaker === 'others' && isLikelyQuestion(entry.text)))
+  ) {
     generateMeetingAnswer(entry.text)
   }
 }
 
 function commitMicUtterance(entry) {
-  const clientUtterances = recentUtterances.filter((item) => item.speaker === 'client')
-  if (isEchoOfClient(entry, clientUtterances)) {
-    console.log(`[Transcription] Dropped microphone echo of the client: ${entry.text}`)
+  const otherUtterances = recentUtterances.filter((item) => item.speaker === 'others')
+  if (isEchoOfOthers(entry, otherUtterances)) {
+    console.log(`[Transcription] Dropped microphone echo of the call: ${entry.text}`)
     return
   }
   commitUtterance(entry)
@@ -387,7 +412,7 @@ function flushPendingMicUtterances() {
 }
 
 function handleFinalUtterance(utterance) {
-  const speaker = utterance.channel === CHANNEL_ME ? 'me' : 'client'
+  const speaker = utterance.channel === CHANNEL_ME ? 'me' : 'others'
   sendToWindow('on-transcription-partial', { speaker, label: speakerLabel(speaker), text: '' })
   const text = correctTerminology(utterance.text)
   const usable = isUsableTranscript(text, {
@@ -399,7 +424,12 @@ function handleFinalUtterance(utterance) {
   if (!usable || !meetingRecorder) return
 
   const offset = meetingRecorder.trackOffsetMs(speaker)
-  const entry = { speaker, text, startMs: offset + utterance.startMs, endMs: offset + utterance.endMs }
+  const entry = {
+    speaker,
+    text,
+    startMs: offset + utterance.startMs,
+    endMs: offset + utterance.endMs
+  }
   if (speaker === 'me' && currentAudioSource !== 'mic') {
     const pending = { entry, timer: null }
     pending.timer = setTimeout(() => {
@@ -413,7 +443,7 @@ function handleFinalUtterance(utterance) {
 }
 
 function handlePartialUtterance(utterance) {
-  const speaker = utterance.channel === CHANNEL_ME ? 'me' : 'client'
+  const speaker = utterance.channel === CHANNEL_ME ? 'me' : 'others'
   sendToWindow('on-transcription-partial', {
     speaker,
     label: speakerLabel(speaker),
@@ -427,10 +457,11 @@ function handlePartialUtterance(utterance) {
  */
 function handleCapturedAudio(chunk, channel) {
   if (!currentMeetingData || stopPromise) return
-  const legacyChannel = currentAudioSource === 'mic' ? CHANNEL_ME : CHANNEL_CLIENT
-  const audioChannel = channel === CHANNEL_ME || channel === CHANNEL_CLIENT ? channel : legacyChannel
+  const legacyChannel = currentAudioSource === 'mic' ? CHANNEL_ME : CHANNEL_OTHERS
+  const audioChannel =
+    channel === CHANNEL_ME || channel === CHANNEL_OTHERS ? channel : legacyChannel
   if (audioChannel === legacyChannel) calculateAndSendAudioLevel(chunk)
-  meetingRecorder?.writeAudio(audioChannel === CHANNEL_ME ? 'me' : 'client', chunk)
+  meetingRecorder?.writeAudio(audioChannel === CHANNEL_ME ? 'me' : 'others', chunk)
   processAudioStream(chunk, audioChannel)
 }
 
@@ -525,10 +556,37 @@ ipcMain.on('close-window', () => {
   app.quit()
 })
 
+let expandedWindowWidth = 900
+let transcriptWindowCollapsed = false
+
+ipcMain.on('set-transcript-collapsed', (_event, collapsed) => {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    typeof collapsed !== 'boolean' ||
+    collapsed === transcriptWindowCollapsed
+  )
+    return
+  if (mainWindow.isMaximized()) mainWindow.unmaximize()
+  const [width, height] = mainWindow.getSize()
+  if (collapsed) {
+    expandedWindowWidth = width
+    mainWindow.setSize(Math.min(width, 560), height)
+  } else {
+    mainWindow.setSize(Math.max(expandedWindowWidth, width), height)
+  }
+  transcriptWindowCollapsed = collapsed
+})
+
 // IPC: Stop meeting manually.
 ipcMain.on('stop-meeting', () => {
   console.log('[Main] Stopping meeting session manually.')
   handleStopSession()
+  if (mainWindow && transcriptWindowCollapsed) {
+    const [, height] = mainWindow.getSize()
+    mainWindow.setSize(expandedWindowWidth, height)
+    transcriptWindowCollapsed = false
+  }
 
   // Unlock mouse events and notify renderer
   if (mainWindow) {
@@ -546,16 +604,19 @@ ipcMain.on('start-meeting', async (_event, data) => {
 
   // Load the matching local speech recognition model before audio capture begins.
   const meetingProfile = configureAI(data)
+  harnessSearchConfig = await loadHarnessSearchConfig(data)
   const grammar = await loadTerminologyFile()
   if (grammar.error) {
     console.warn(`[Terminology] Could not load ${grammar.path}: ${grammar.error}`)
   } else {
     console.log(`[Terminology] Loaded ${grammar.count} grammar term(s) from ${grammar.path}`)
   }
-  currentAudioOutputDevice = typeof data?.audioOutputDevice === 'string' ? data.audioOutputDevice : ''
+  currentAudioOutputDevice =
+    typeof data?.audioOutputDevice === 'string' ? data.audioOutputDevice : ''
   recentUtterances = []
   pendingMicUtterances = []
   meetingDiagnostics = []
+  autoAnswerEnabled = data?.autoAnswer !== false
 
   try {
     meetingRecorder = createMeetingRecorder({
@@ -604,7 +665,7 @@ ipcMain.handle('get-transcriber-status', () => getTranscriberStatus())
 
 ipcMain.on('native-audio-chunk', (_event, chunk, channel) => {
   if (process.platform === 'darwin' && currentMeetingData) {
-    handleCapturedAudio(Buffer.from(chunk), channel === CHANNEL_ME ? CHANNEL_ME : CHANNEL_CLIENT)
+    handleCapturedAudio(Buffer.from(chunk), channel === CHANNEL_ME ? CHANNEL_ME : CHANNEL_OTHERS)
   }
 })
 
@@ -639,6 +700,12 @@ ipcMain.on('ask-meeting-question', (_event, question) => {
   meetingRecorder?.addUtterance({ speaker: 'manual', text, startMs: elapsedMs, endMs: elapsedMs })
   sendToWindow('on-transcription', { speaker: 'manual', label: speakerLabel('manual'), text })
   generateMeetingAnswer(text)
+})
+
+ipcMain.on('set-auto-answer', (_event, enabled) => {
+  autoAnswerEnabled = enabled !== false
+  // Switching off also stops an answer that is being generated.
+  if (!autoAnswerEnabled) activeAnswerController?.abort()
 })
 
 ipcMain.on('retry-last-meeting-question', () => {
@@ -688,6 +755,15 @@ ipcMain.handle('get-saved-meetings', async () => {
 ipcMain.on('open-meeting-folder', (_event, folder) => {
   // Only folders inside the meetings directory may be opened from the renderer.
   if (isMeetingFolder(folder)) shell.openPath(folder)
+})
+
+ipcMain.handle('export-final-transcript', async (_event, { folder, destination }) => {
+  try {
+    const path = await exportFinalTranscript({ meetingsDirectory, folder, destination })
+    return { path }
+  } catch (error) {
+    return { error: error.message }
+  }
 })
 
 ipcMain.on('generate-final-transcript', (_event, folder) => {

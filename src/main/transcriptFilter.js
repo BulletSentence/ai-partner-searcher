@@ -1,5 +1,5 @@
 // Whisper invents text for silence, music and keyboard noise. These are the phrases it produces most
-// often in Portuguese and English; none of them is something a client says in a meeting.
+// often in Portuguese and English; none of them is something a person says in a meeting.
 const hallucinationPatterns = [
   /^\W*legendas?\s+(pela|da|de|por)\b/iu,
   /sous-titrage|radio-canada/iu,
@@ -64,17 +64,17 @@ export function wordOverlap(candidate, reference) {
 }
 
 /**
- * Without headphones the microphone hears the client coming out of the speakers. Such an utterance
- * overlaps a client utterance in time and repeats its words, so it is the client's voice, not the owner's.
+ * Without headphones the microphone hears the other participants coming out of the speakers. Such
+ * an utterance overlaps theirs in time and repeats its words, so it is their voice, not the owner's.
  */
-export function isEchoOfClient(micUtterance, clientUtterances = []) {
-  // The two sides are cut at different pauses, so the echo may span several client utterances.
-  const overlapping = clientUtterances.filter(
-    (client) =>
-      micUtterance.startMs < client.endMs + ECHO_WINDOW_MS &&
-      micUtterance.endMs > client.startMs - ECHO_WINDOW_MS
+export function isEchoOfOthers(micUtterance, otherUtterances = []) {
+  // The two sides are cut at different pauses, so the echo may span several of their utterances.
+  const overlapping = otherUtterances.filter(
+    (other) =>
+      micUtterance.startMs < other.endMs + ECHO_WINDOW_MS &&
+      micUtterance.endMs > other.startMs - ECHO_WINDOW_MS
   )
   if (!overlapping.length) return false
-  const clientText = overlapping.map((client) => client.text).join(' ')
-  return wordOverlap(micUtterance.text, clientText) >= ECHO_SIMILARITY
+  const otherText = overlapping.map((other) => other.text).join(' ')
+  return wordOverlap(micUtterance.text, otherText) >= ECHO_SIMILARITY
 }

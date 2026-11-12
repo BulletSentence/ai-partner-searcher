@@ -14,7 +14,7 @@ const STOP_TIMEOUT_MS = 8_000
 const MAX_PROMPT_CHARS = 700
 
 /** Audio channels understood by the adapter: who is speaking is known from where the audio came from. */
-export const CHANNEL_CLIENT = 0
+export const CHANNEL_OTHERS = 0
 export const CHANNEL_ME = 1
 
 let child = null
@@ -142,7 +142,7 @@ function handleChildMessage(line) {
   }
   if (typeof message.text !== 'string' || !message.text.trim()) return
   const utterance = {
-    channel: message.channel === CHANNEL_ME ? CHANNEL_ME : CHANNEL_CLIENT,
+    channel: message.channel === CHANNEL_ME ? CHANNEL_ME : CHANNEL_OTHERS,
     text: message.text.trim(),
     startMs: Number(message.t0) || 0,
     endMs: Number(message.t1) || 0,
@@ -221,12 +221,12 @@ export function configureTranscriber(
   return true
 }
 
-/** Feeds 16 kHz signed-16-bit mono PCM from one channel (client or meeting owner) to Whisper.cpp. */
-export function processAudioStream(data, channel = CHANNEL_CLIENT) {
+/** Feeds 16 kHz signed-16-bit mono PCM from one channel (other participants or meeting owner) to Whisper.cpp. */
+export function processAudioStream(data, channel = CHANNEL_OTHERS) {
   if (!child && !configureTranscriber(currentLanguage)) return
   if (!child?.stdin?.writable || child.stdin.destroyed || child.stdin.writableEnded) return
   const header = Buffer.alloc(5)
-  header.writeUInt8(channel === CHANNEL_ME ? CHANNEL_ME : CHANNEL_CLIENT, 0)
+  header.writeUInt8(channel === CHANNEL_ME ? CHANNEL_ME : CHANNEL_OTHERS, 0)
   header.writeUInt32LE(data.length, 1)
   child.stdin.write(header)
   child.stdin.write(data)

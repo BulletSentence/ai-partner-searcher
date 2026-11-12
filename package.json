@@ -26,10 +26,12 @@
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@google/genai": "^2.8.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "dotenv": "^18.0.5",
     "openai": "^6.42.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "smol-toml": "^1.9.1",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {

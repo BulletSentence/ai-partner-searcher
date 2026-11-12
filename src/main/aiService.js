@@ -82,7 +82,7 @@ export function configureAI(userData) {
   const responseLanguage = meeting.language === 'en-US' ? 'English' : 'Brazilian Portuguese'
 
   dynamicSystemInstruction = `
-You are a high-speed live meeting copilot. Answer client questions accurately, clearly, and naturally. Default to one direct sentence; use at most 3 sentences or 70 words only when an explanation is needed.
+You are a high-speed live meeting copilot. The meeting may be with a client, a daily stand-up, a team alignment or any other call; the meeting context says which. Suggest what the meeting owner should answer to questions asked by the other participants, accurately, clearly, and naturally, in a tone that fits that kind of meeting. Default to one direct sentence; use at most 3 sentences or 70 words only when an explanation is needed.
 
 MANDATORY LANGUAGE RULE: Respond exclusively in ${responseLanguage}. Never answer in English when the selected language is Brazilian Portuguese, even if the question, API documentation, error message, code, or meeting context is in English. Keep technical identifiers such as endpoint names, HTTP methods, headers, token names, and code exactly as written, but explain them in Brazilian Portuguese. Do not add an English translation after the Portuguese answer.
 
@@ -98,7 +98,9 @@ Preserve exact proper names, acronyms and product names found in the meeting con
   useOllama = meeting.useOllama
   openaiModel = meeting.openaiModel
   conversationHistory = []
-  console.log(`[AI Service] Configured meeting prompt (Ollama: ${useOllama}, OpenAI: ${openaiModel})`)
+  console.log(
+    `[AI Service] Configured meeting prompt (Ollama: ${useOllama}, OpenAI: ${openaiModel})`
+  )
   return meeting
 }
 
@@ -179,8 +181,8 @@ async function callOpenAIStream(systemInstruction, history, onDelta, signal) {
  * @returns {Promise<string>} The response text from Ollama.
  */
 async function callOllama(systemInstruction, conversationHistory) {
-  const prompt = `${systemInstruction}\n\nConversation History:\n${conversationHistory.map(m => `${m.role === 'model' || m.role === 'assistant' ? 'AI' : 'User'}: ${m.content}`).join('\n')}\n\nAI:`
-  
+  const prompt = `${systemInstruction}\n\nConversation History:\n${conversationHistory.map((m) => `${m.role === 'model' || m.role === 'assistant' ? 'AI' : 'User'}: ${m.content}`).join('\n')}\n\nAI:`
+
   console.log('[AI Service] Attempting local text generation via Ollama (gemma2:2b)...')
   const response = await fetch('http://localhost:11434/api/generate', {
     method: 'POST',
@@ -245,8 +247,13 @@ export async function generateMeetingHelp(
       }
       throw new Error('Ollama returned an empty response.')
     } catch (ollamaErr) {
-      logRuntimeEvent('provider_failure', { provider: 'Ollama Local', ...describeProviderError(ollamaErr) })
-      console.warn(`[AI Service] Direct Ollama call failed: ${ollamaErr.message}. Falling back to cascade...`)
+      logRuntimeEvent('provider_failure', {
+        provider: 'Ollama Local',
+        ...describeProviderError(ollamaErr)
+      })
+      console.warn(
+        `[AI Service] Direct Ollama call failed: ${ollamaErr.message}. Falling back to cascade...`
+      )
     }
   }
 
@@ -267,17 +274,21 @@ export async function generateMeetingHelp(
     if (signal?.aborted) return
     const errorDetails = describeProviderError(openaiErr)
     logRuntimeEvent('provider_failure', { provider: openaiModels[openaiModel], ...errorDetails })
-    onProviderStatus?.(`OpenAI falhou (${errorDetails.status || errorDetails.name}); alternando para Gemini…`)
-    console.warn(`[AI Service] ${openaiModels[openaiModel]} failed: ${openaiErr.message}. Falling back to Gemini...`)
+    onProviderStatus?.(
+      `OpenAI falhou (${errorDetails.status || errorDetails.name}); alternando para Gemini…`
+    )
+    console.warn(
+      `[AI Service] ${openaiModels[openaiModel]} failed: ${openaiErr.message}. Falling back to Gemini...`
+    )
   }
 
   // Primary: Try Gemini 2.5 Flash with 5000ms timeout
   try {
     onProviderStatus?.('Consultando Gemini…')
     console.log('[AI Service] Attempting text generation with Gemini 2.5 Flash (5s Timeout)...')
-    
+
     // Map history to the required parts array structure of Gemini SDK
-    const geminiContents = conversationHistory.map(msg => ({
+    const geminiContents = conversationHistory.map((msg) => ({
       role: msg.role,
       parts: [{ text: msg.content }]
     }))
@@ -290,7 +301,8 @@ export async function generateMeetingHelp(
           systemInstruction: dynamicSystemInstruction || 'Act as a meeting copilot.'
         }
       })
-      const text = response.text || (response.candidates && response.candidates[0].content.parts[0].text)
+      const text =
+        response.text || (response.candidates && response.candidates[0].content.parts[0].text)
       if (!text) {
         throw new Error('Gemini returned an empty response.')
       }
@@ -309,9 +321,14 @@ export async function generateMeetingHelp(
     return
   } catch (geminiErr) {
     if (signal?.aborted) return
-    logRuntimeEvent('provider_failure', { provider: 'Gemini 2.5 Flash', ...describeProviderError(geminiErr) })
+    logRuntimeEvent('provider_failure', {
+      provider: 'Gemini 2.5 Flash',
+      ...describeProviderError(geminiErr)
+    })
     onProviderStatus?.('Gemini indisponível; alternando para Ollama…')
-    console.warn(`[AI Service] Gemini failed or timed out: ${geminiErr.message}. Falling back to Ollama...`)
+    console.warn(
+      `[AI Service] Gemini failed or timed out: ${geminiErr.message}. Falling back to Ollama...`
+    )
 
     // Secondary: Try local Ollama instance
     try {
@@ -325,9 +342,14 @@ export async function generateMeetingHelp(
       throw new Error('Ollama returned an empty response.')
     } catch (ollamaErr) {
       if (signal?.aborted) return
-      logRuntimeEvent('provider_failure', { provider: 'Ollama Local', ...describeProviderError(ollamaErr) })
+      logRuntimeEvent('provider_failure', {
+        provider: 'Ollama Local',
+        ...describeProviderError(ollamaErr)
+      })
       onProviderStatus?.('Ollama indisponível; alternando para Claude…')
-      console.warn(`[AI Service] Ollama fallback failed: ${ollamaErr.message}. Falling back to Claude...`)
+      console.warn(
+        `[AI Service] Ollama fallback failed: ${ollamaErr.message}. Falling back to Claude...`
+      )
 
       // Tertiary: Try Anthropic Claude 3.5 Sonnet
       try {
@@ -339,8 +361,8 @@ export async function generateMeetingHelp(
 
         console.log('[AI Service] Attempting text generation with Claude 3.5 Sonnet...')
         const anthropic = new Anthropic({ apiKey: anthropicApiKey })
-        
-        const anthropicMessages = conversationHistory.map(msg => ({
+
+        const anthropicMessages = conversationHistory.map((msg) => ({
           role: msg.role === 'model' ? 'assistant' : msg.role,
           content: msg.content
         }))
@@ -361,7 +383,10 @@ export async function generateMeetingHelp(
         throw new Error('Anthropic returned an empty response.')
       } catch (anthropicErr) {
         if (signal?.aborted) return
-        logRuntimeEvent('provider_failure', { provider: 'Claude 3.5 Sonnet', ...describeProviderError(anthropicErr) })
+        logRuntimeEvent('provider_failure', {
+          provider: 'Claude 3.5 Sonnet',
+          ...describeProviderError(anthropicErr)
+        })
         onProviderStatus?.('Claude indisponível; tentando OpenAI novamente…')
         console.warn(`[AI Service] Anthropic failed: ${anthropicErr.message}. Trying OpenAI...`)
 
@@ -372,8 +397,13 @@ export async function generateMeetingHelp(
           onAnswerReady(text, openaiModels[openaiModel])
           return
         } catch (openaiErr) {
-          logRuntimeEvent('provider_failure', { provider: openaiModels[openaiModel], ...describeProviderError(openaiErr) })
-          console.error(`[AI Service] All AI Fallback layers exhausted. Final error: ${openaiErr.message}`)
+          logRuntimeEvent('provider_failure', {
+            provider: openaiModels[openaiModel],
+            ...describeProviderError(openaiErr)
+          })
+          console.error(
+            `[AI Service] All AI Fallback layers exhausted. Final error: ${openaiErr.message}`
+          )
           const configuredProviders = [
             process.env.OPENAI_API_KEY && 'OPENAI_API_KEY',
             process.env.GEMINI_API_KEY && 'GEMINI_API_KEY',
