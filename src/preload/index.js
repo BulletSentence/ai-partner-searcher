@@ -5,6 +5,13 @@ import { electronAPI } from '@electron-toolkit/preload'
 const api = {
   isMac: process.platform === 'darwin',
   onTranscription: (callback) => ipcRenderer.on('on-transcription', (_event, value) => callback(value)),
+  onTranscriptionPartial: (callback) =>
+    ipcRenderer.on('on-transcription-partial', (_event, value) => callback(value)),
+  onMeetingSaved: (callback) => ipcRenderer.on('meeting-saved', (_event, folder) => callback(folder)),
+  openMeetingFolder: (folder) => ipcRenderer.send('open-meeting-folder', folder),
+  generateFinalTranscript: (folder) => ipcRenderer.send('generate-final-transcript', folder),
+  onFinalTranscriptStatus: (callback) =>
+    ipcRenderer.on('final-transcript-status', (_event, status) => callback(status)),
   onAiAnswer: (callback) => ipcRenderer.on('on-ai-answer', (_event, value) => callback(value)),
   onAiAnswerStart: (callback) => ipcRenderer.on('on-ai-answer-start', (_event, value) => callback(value)),
   onAiAnswerDelta: (callback) => ipcRenderer.on('on-ai-answer-delta', (_event, value) => callback(value)),
@@ -30,7 +37,7 @@ const api = {
   onAudioLevel: (cb) => ipcRenderer.on('audio-level', (_e, val) => cb(val)),
   onNativeAudioCaptureStart: (cb) => ipcRenderer.on('start-native-audio-capture', () => cb()),
   onNativeAudioCaptureStop: (cb) => ipcRenderer.on('stop-native-audio-capture', () => cb()),
-  sendNativeAudioChunk: (chunk) => ipcRenderer.send('native-audio-chunk', chunk),
+  sendNativeAudioChunk: (chunk, channel = 0) => ipcRenderer.send('native-audio-chunk', chunk, channel),
   reportNativeAudioError: (message) => ipcRenderer.send('native-audio-capture-error', message),
   setWindowInteractive: () => ipcRenderer.send('set-window-interactive'),
   setWindowClickthrough: () => ipcRenderer.send('set-window-clickthrough'),

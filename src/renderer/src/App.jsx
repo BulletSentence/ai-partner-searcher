@@ -27,8 +27,10 @@ function App() {
   const [transcriberStatus, setTranscriberStatus] = useState({ binaryFound: false, modelsFound: 0 })
 
   // HUD State
-  const [transcription, setTranscription] = useState('')
+  const [transcription, setTranscription] = useState(null)
   const [transcriptionHistory, setTranscriptionHistory] = useState([])
+  const [savedMeetingFolder, setSavedMeetingFolder] = useState('')
+  const [finalTranscriptStatus, setFinalTranscriptStatus] = useState(null)
   const [aiAnswer, setAiAnswer] = useState('')
   const [aiProvider, setAiProvider] = useState('')
   const [aiSources, setAiSources] = useState([])
@@ -50,8 +52,61 @@ function App() {
     if (cleanup) await cleanup()
   }
 
+  // Streams one audio track to the main process as 16 kHz mono PCM, tagged with who it belongs to.
+  const streamTrackToMain = async (stream, channel) => {
+    const audioContext = new AudioContext({ sampleRate: 16000 })
+    const source = audioContext.createMediaStreamSource(stream)
+    const silentGain = audioContext.createGain()
+    silentGain.gain.value = 0
+    let node
+
+    try {
+      // Preferred path: capture on the audio thread, in 100 ms blocks.
+      await audioContext.audioWorklet.addModule(new URL('pcm-capture-worklet.js', document.baseURI).href)
+      node = new AudioWorkletNode(audioContext, 'pcm-capture', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        channelCount: 2,
+        channelCountMode: 'max'
+      })
+      node.port.onmessage = (event) => window.api.sendNativeAudioChunk(event.data, channel)
+    } catch (error) {
+      // Fallback: the older main-thread processor, which can drop audio when the window is busy.
+      console.warn('AudioWorklet unavailable, using ScriptProcessor:', error)
+      node = audioContext.createScriptProcessor(4096, 1, 1)
+      node.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0)
+        const pcm = new Int16Array(input.length)
+        for (let index = 0; index < input.length; index += 1) {
+          const sample = Math.max(-1, Math.min(1, input[index]))
+          pcm[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+        }
+        window.api.sendNativeAudioChunk(pcm.buffer, channel)
+      }
+    }
+
+    source.connect(node)
+    node.connect(silentGain)
+    silentGain.connect(audioContext.destination)
+
+    return async () => {
+      if (node.port) node.port.onmessage = null
+      node.disconnect()
+      source.disconnect()
+      silentGain.disconnect()
+      stream.getTracks().forEach((track) => track.stop())
+      await audioContext.close()
+    }
+  }
+
+  // macOS: the system audio (the client, channel 0) and the microphone (you, channel 1) are
+  // captured together for the whole meeting, so both sides are recorded and transcribed.
   const startNativeAudioCapture = async () => {
     if (!window.api.isMac || nativeAudioCleanupRef.current) return
+    const cleanups = []
+    nativeAudioCleanupRef.current = async () => {
+      await Promise.all(cleanups.map((cleanup) => cleanup()))
+    }
 
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -63,38 +118,40 @@ function App() {
         stream.getTracks().forEach((track) => track.stop())
         throw new Error('O macOS não retornou uma faixa de áudio do sistema.')
       }
-
-      const audioContext = new AudioContext({ sampleRate: 16000 })
-      const source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]))
-      const processor = audioContext.createScriptProcessor(4096, 1, 1)
-      const silentGain = audioContext.createGain()
-      silentGain.gain.value = 0
-
-      processor.onaudioprocess = (event) => {
-        const input = event.inputBuffer.getChannelData(0)
-        const pcm = new Int16Array(input.length)
-        for (let index = 0; index < input.length; index += 1) {
-          const sample = Math.max(-1, Math.min(1, input[index]))
-          pcm[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
-        }
-        window.api.sendNativeAudioChunk(pcm.buffer)
-      }
-
-      source.connect(processor)
-      processor.connect(silentGain)
-      silentGain.connect(audioContext.destination)
-
-      nativeAudioCleanupRef.current = async () => {
-        processor.disconnect()
-        source.disconnect()
-        silentGain.disconnect()
+      const stopSystem = await streamTrackToMain(new MediaStream([audioTrack]), 0)
+      cleanups.push(async () => {
+        await stopSystem()
         stream.getTracks().forEach((track) => track.stop())
-        await audioContext.close()
-      }
+      })
     } catch (error) {
+      nativeAudioCleanupRef.current = null
       window.api.reportNativeAudioError(error.message)
       throw error
     }
+
+    // The meeting still works without the microphone: only your own side is left out.
+    try {
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        // Automatic gain is off: it amplifies room noise during pauses, which blurs where speech ends.
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 },
+        video: false
+      })
+      cleanups.push(await streamTrackToMain(micStream, 1))
+    } catch (error) {
+      window.api.reportNativeAudioError(`Microfone indisponível: ${error.message}`)
+    }
+  }
+
+  // Describes the final-transcription job when it concerns the given meeting folder.
+  const finalTranscriptLabel = (folder) => {
+    if (!finalTranscriptStatus || finalTranscriptStatus.folder !== folder) return { running: false, text: '' }
+    const { state, progress = 0, message } = finalTranscriptStatus
+    if (state === 'running') {
+      return { running: true, text: `Gerando transcrição final… ${Math.round(progress * 100)}%` }
+    }
+    if (state === 'failed') return { running: false, text: `Não foi possível gerar: ${message}` }
+    if (state === 'cancelled') return { running: false, text: 'Transcrição final interrompida.' }
+    return { running: false, text: '' }
   }
 
   // Load saved sessions when returning to the setup screen
@@ -169,9 +226,35 @@ function App() {
 
   useEffect(() => {
     // Listen for speech-to-text transcriptions
-    window.api.onTranscription((text) => {
-      setTranscription(text)
-      setTranscriptionHistory((prev) => [...prev, text])
+    window.api.onTranscription((entry) => {
+      if (!entry?.text) return
+      setTranscription(null)
+      setTranscriptionHistory((prev) => [...prev, entry])
+    })
+
+    // The sentence still being spoken, refreshed while the person talks.
+    window.api.onTranscriptionPartial((entry) => {
+      setTranscription(entry?.text ? entry : null)
+    })
+
+    // Progress of the careful transcription made from the recording after the meeting.
+    window.api.onFinalTranscriptStatus((status) => {
+      setFinalTranscriptStatus(status)
+      if (status?.state !== 'done') return
+      window.api
+        .getSavedMeetings()
+        .then((sessions) => {
+          setSavedSessions(sessions)
+          setSelectedSession(
+            (current) => sessions.find((session) => session.folder === current?.folder) || current
+          )
+        })
+        .catch(() => {})
+    })
+
+    window.api.onMeetingSaved((folder) => {
+      setSavedMeetingFolder(folder || '')
+      window.api.getSavedMeetings().then(setSavedSessions).catch(() => {})
     })
 
     // Listen for AI assistant updates
@@ -223,6 +306,7 @@ function App() {
   const handleStart = async () => {
     if (!formData.transcriberModel || !transcriberStatus.ready) return
     setIsPreparingSources(true)
+    setSavedMeetingFolder('')
     try {
       if (window.api.isMac) await startNativeAudioCapture()
       const status = await window.api.prepareKnowledgeSources(formData)
@@ -244,7 +328,7 @@ function App() {
 
   const handleStop = () => {
     window.api.stopMeeting()
-    setTranscription('')
+    setTranscription(null)
     setTranscriptionHistory([])
     setAiAnswer('')
     setAiProvider('')
@@ -545,16 +629,74 @@ function App() {
                   🎙️ Histórico completo da transcrição
                 </h4>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {selectedSession.data.conversationHistory
-                    .filter((msg) => msg.role === 'user')
-                    .map((msg, idx) => (
-                      <div
-                        key={idx}
-                        style={{ fontSize: '0.85rem', color: '#94a3b8', lineHeight: '1.5' }}
+                  {selectedSession.folder && (
+                    <button
+                      onClick={() => window.api.openMeetingFolder(selectedSession.folder)}
+                      style={{
+                        alignSelf: 'flex-start',
+                        background: 'rgba(34, 211, 238, 0.1)',
+                        border: '1px solid rgba(34, 211, 238, 0.25)',
+                        color: '#67e8f9',
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem'
+                      }}
+                    >
+                      Abrir pasta com áudio e transcrição
+                    </button>
+                  )}
+                  {selectedSession.folder && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                      <button
+                        disabled={finalTranscriptLabel(selectedSession.folder).running}
+                        onClick={() => window.api.generateFinalTranscript(selectedSession.folder)}
+                        style={{
+                          background: 'rgba(74, 222, 128, 0.1)',
+                          border: '1px solid rgba(74, 222, 128, 0.25)',
+                          color: '#86efac',
+                          padding: '6px 12px',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontSize: '0.8rem'
+                        }}
                       >
-                        {msg.content}
-                      </div>
-                    ))}
+                        {selectedSession.data.finalTranscript
+                          ? 'Refazer transcrição final'
+                          : 'Gerar transcrição final'}
+                      </button>
+                      <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>
+                        {finalTranscriptLabel(selectedSession.folder).text ||
+                          (selectedSession.data.finalTranscript
+                            ? 'Mostrando a transcrição final, feita a partir da gravação.'
+                            : 'Mostrando a transcrição feita ao vivo.')}
+                      </span>
+                    </div>
+                  )}
+                  {Array.isArray(selectedSession.data.finalTranscript || selectedSession.data.transcript)
+                    ? (selectedSession.data.finalTranscript || selectedSession.data.transcript).map((entry, idx) => (
+                        <div
+                          key={idx}
+                          style={{ fontSize: '0.85rem', color: '#94a3b8', lineHeight: '1.5' }}
+                        >
+                          <strong style={{ color: entry.speaker === 'client' ? '#67e8f9' : '#cbd5e1' }}>
+                            {{ client: 'Cliente', me: 'Eu', manual: 'Pergunta manual' }[entry.speaker] ||
+                              'Participante'}
+                            :
+                          </strong>{' '}
+                          {entry.text}
+                        </div>
+                      ))
+                    : (selectedSession.data.conversationHistory || [])
+                        .filter((msg) => msg.role === 'user')
+                        .map((msg, idx) => (
+                          <div
+                            key={idx}
+                            style={{ fontSize: '0.85rem', color: '#94a3b8', lineHeight: '1.5' }}
+                          >
+                            {msg.content}
+                          </div>
+                        ))}
                 </div>
               </div>
 
@@ -580,7 +722,7 @@ function App() {
                 >
                   🧠 Sugestões geradas pela IA
                 </h4>
-                {selectedSession.data.conversationHistory
+                {(selectedSession.data.conversationHistory || [])
                   .filter((msg) => msg.role === 'model' || msg.role === 'assistant')
                   .map((msg, idx) => (
                     <div
@@ -858,6 +1000,28 @@ function App() {
           >
             📂 Histórico de sessões salvas
           </h4>
+          {savedMeetingFolder && (
+            <button
+              onClick={() => window.api.openMeetingFolder(savedMeetingFolder)}
+              style={{
+                margin: '0 0 8px 0',
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                color: '#4ade80',
+                cursor: 'pointer',
+                fontSize: '0.78rem',
+                textAlign: 'left'
+              }}
+            >
+              Áudio e transcrição salvos em {savedMeetingFolder}
+              {finalTranscriptLabel(savedMeetingFolder).text &&
+                ` — ${finalTranscriptLabel(savedMeetingFolder).text}`}
+              {finalTranscriptStatus?.folder === savedMeetingFolder &&
+                finalTranscriptStatus.state === 'done' &&
+                ' — transcrição final pronta'}
+            </button>
+          )}
           <div
             style={{
               display: 'flex',
@@ -1336,9 +1500,12 @@ function App() {
               gap: '10px'
             }}
           >
-            {transcriptionHistory.map((text, index) => (
+            {transcriptionHistory.map((entry, index) => (
               <div key={index} style={{ fontSize: '0.95rem', color: '#94a3b8', lineHeight: '1.5' }}>
-                {text}
+                <strong style={{ color: entry.speaker === 'client' ? '#67e8f9' : '#cbd5e1' }}>
+                  {entry.label}:
+                </strong>{' '}
+                {entry.text}
               </div>
             ))}
             {transcription && (
@@ -1350,7 +1517,7 @@ function App() {
                   lineHeight: '1.5'
                 }}
               >
-                {transcription}...
+                {transcription.label}: {transcription.text}...
               </div>
             )}
             <div ref={transcriptEndRef} />

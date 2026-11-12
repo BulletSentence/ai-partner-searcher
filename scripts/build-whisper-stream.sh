@@ -34,3 +34,11 @@ mkdir -p "$output_dir"
 cp "$build_dir/whisper-stream" "$output_dir/whisper-stream"
 chmod +x "$output_dir/whisper-stream"
 echo "Adaptador Whisper pronto em $output_dir/whisper-stream"
+
+# The voice-detection model (under 1 MB) that tells the adapter where speech starts and stops.
+vad_dir="${WHISPER_MODELS_DIR:-$repo_root/models}/vad"
+if ! ls "$vad_dir"/ggml-silero-*.bin >/dev/null 2>&1; then
+  mkdir -p "$vad_dir"
+  bash "$whisper_source_dir/models/download-vad-model.sh" silero-v6.2.0 "$vad_dir" ||
+    echo "Não foi possível baixar o detector de voz; o corte de fala usará apenas o volume." >&2
+fi
