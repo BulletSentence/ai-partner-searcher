@@ -252,6 +252,9 @@ async function generateMeetingAnswer(questionText) {
   )
 }
 
+// When true the window is hidden from screen sharing / screenshots.
+const CONTENT_PROTECTION = true
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
@@ -275,7 +278,7 @@ function createWindow() {
     }
   })
 
-  mainWindow.setContentProtection(false)
+  mainWindow.setContentProtection(CONTENT_PROTECTION)
 
   if (process.platform === 'darwin') {
     session.defaultSession.setDisplayMediaRequestHandler(
@@ -796,6 +799,9 @@ ipcMain.on('generate-final-transcript', (_event, folder) => {
 })
 
 // Persistent profile values are intentionally exposed without API keys.
+ipcMain.handle('get-content-protection', () =>
+  mainWindow && !mainWindow.isDestroyed() ? mainWindow.isContentProtected() : CONTENT_PROTECTION
+)
 ipcMain.handle('get-default-meeting-profile', () => getDefaultMeetingProfile())
 ipcMain.handle('get-meeting-settings', () => getMeetingSettings())
 ipcMain.handle('save-meeting-settings', async (_event, settings) => {

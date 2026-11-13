@@ -28,6 +28,7 @@ const api = {
   minimize: () => ipcRenderer.send('minimize-window'),
   close: () => ipcRenderer.send('close-window'),
   onWindowLockChange: (cb) => ipcRenderer.on('window-unlocked', (_e, val) => cb(val)),
+  getContentProtection: () => ipcRenderer.invoke('get-content-protection'),
   getDefaultMeetingProfile: () => ipcRenderer.invoke('get-default-meeting-profile'),
   getMeetingSettings: () => ipcRenderer.invoke('get-meeting-settings'),
   saveMeetingSettings: (settings) => ipcRenderer.invoke('save-meeting-settings', settings),

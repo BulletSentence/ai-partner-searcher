@@ -2,6 +2,35 @@ import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+function renderContentProtectionBadge(isProtected) {
+  if (isProtected === null) return null
+  return (
+    <span
+      className="content-protection-badge"
+      aria-label={
+        isProtected ? 'Oculto no compartilhamento de tela' : 'Visível no compartilhamento de tela'
+      }
+      title={
+        isProtected
+          ? 'setContentProtection ativo: a janela fica oculta em compartilhamento de tela e capturas'
+          : 'setContentProtection desligado: a janela aparece em compartilhamento de tela e capturas'
+      }
+      style={{
+        flex: '0 0 auto',
+        width: '14px',
+        overflow: 'hidden',
+        fontSize: '0.7rem',
+        lineHeight: 1,
+        textAlign: 'center',
+        whiteSpace: 'nowrap',
+        cursor: 'default'
+      }}
+    >
+      {isProtected ? '🙈' : '👁️'}
+    </span>
+  )
+}
+
 function App() {
   const [isSetupComplete, setIsSetupComplete] = useState(false)
 
@@ -33,6 +62,7 @@ function App() {
   const [savedSessions, setSavedSessions] = useState([])
   const [selectedSession, setSelectedSession] = useState(null)
   const [indexStatus, setIndexStatus] = useState(null)
+  const [isContentProtected, setIsContentProtected] = useState(null)
   const [isPreparingSources, setIsPreparingSources] = useState(false)
   const [audioOutputs, setAudioOutputs] = useState([])
   const [transcriptionModels, setTranscriptionModels] = useState([])
@@ -190,6 +220,13 @@ function App() {
       console.error('Error loading saved sessions:', err)
     }
   }
+
+  useEffect(() => {
+    window.api
+      .getContentProtection()
+      .then(setIsContentProtected)
+      .catch(() => setIsContentProtected(null))
+  }, [])
 
   useEffect(() => {
     if (!isSetupComplete) {
@@ -1710,6 +1747,7 @@ function App() {
                 >
                   Transcrição
                 </h3>
+                {renderContentProtectionBadge(isContentProtected)}
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1900,6 +1938,7 @@ function App() {
                   {answerStatus}
                 </div>
               </div>
+              {renderContentProtectionBadge(isContentProtected)}
             </div>
             {aiProvider && (
               <span
