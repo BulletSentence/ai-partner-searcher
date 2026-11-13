@@ -49,8 +49,8 @@ test('records audio and transcript of a meeting into its own folder', async (t) 
 
   const files = await readdir(folder)
   assert.deepEqual(files.sort(), [
-    'audio-participantes.wav',
     'audio-eu.wav',
+    'audio-participantes.wav',
     'reuniao.json',
     'transcricao.jsonl',
     'transcricao.md'

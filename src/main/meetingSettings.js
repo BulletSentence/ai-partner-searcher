@@ -15,7 +15,10 @@ const allowedFields = [
   'openaiModel',
   'autoAnswer',
   'showLivePreview',
-  'transcriptCollapsed'
+  'transcriptCollapsed',
+  'answerCount',
+  'autoHeight',
+  'showManualQuestion'
 ]
 
 function getSettingsPath() {

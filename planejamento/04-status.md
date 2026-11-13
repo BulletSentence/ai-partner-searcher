@@ -53,3 +53,11 @@ O áudio de teste é voz sintética limpa. A qualidade com voz real de chamada (
 - Linux e Windows continuam com uma origem de áudio por vez (sistema ou microfone); a gravação tem só a faixa capturada.
 - Sem fone, a faixa do microfone na gravação contém também a voz do cliente.
 - Respostas curtas de uma palavra ("Sim.", "Não.") com baixa confiança são descartadas da transcrição.
+
+## Interface responsiva (12/11/2026)
+
+- As telas de configuração e de reunião ocupam a janela inteira e acompanham o redimensionamento (mínimo 420 × 360). Antes eram cartões fixos de 860 × 600.
+- O tamanho base do texto varia com a largura da janela, de cerca de 12 px a 14 px; como o app usa `rem`, tudo encolhe junto.
+- A janela de configuração pode ser arrastada pela barra de cima. A barra ficava dentro da área com rolagem, onde o Electron ignora regiões de arrastar; agora só o corpo do formulário rola.
+- Cabeçalhos: botões viram ícone + rótulo curto, com o texto completo no tooltip. Abaixo de 760 px ficam só os ícones; abaixo de 560 px somem os detalhes secundários (nome do provedor, tempos, contagem de arquivos). Títulos ficam numa linha, com reticências.
+- Verificado renderizando as duas telas no Electron, com a API do app simulada, em 900, 640 e 460 px de largura. O arrasto em si não foi testado com o mouse.

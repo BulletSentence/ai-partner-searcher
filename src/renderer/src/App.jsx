@@ -18,7 +18,13 @@ function App() {
     openaiModel: 'gpt-6-luna',
     autoAnswer: true,
     showLivePreview: false,
-    transcriptCollapsed: true
+    transcriptCollapsed: true,
+    // How many answers the panel shows (current, plus up to two earlier ones).
+    answerCount: 1,
+    // Window height follows the length of the answers during the meeting.
+    autoHeight: true,
+    // The manual question field in the answers panel.
+    showManualQuestion: true
   })
 
   // History Log States
@@ -42,6 +48,13 @@ function App() {
   const [aiSources, setAiSources] = useState([])
   const [aiLatency, setAiLatency] = useState(null)
   const [isAnswerStreaming, setIsAnswerStreaming] = useState(false)
+  // Besides the current answer the panel keeps the two before it, newest first. How many are
+  // visible depends on the window height (see .previous-answer in main.css): 1, 2 or 3 in total.
+  const [currentQuestion, setCurrentQuestion] = useState('')
+  const [previousAnswers, setPreviousAnswers] = useState([])
+  const completedAnswerRef = useRef(null)
+  const answerAreaRef = useRef(null)
+  const answerContentRef = useRef(null)
   const [answerStatus, setAnswerStatus] = useState('Ouvindo')
   const [manualQuestion, setManualQuestion] = useState('')
   const [sourceFilter, setSourceFilter] = useState('all')
@@ -68,7 +81,9 @@ function App() {
 
     try {
       // Preferred path: capture on the audio thread, in 100 ms blocks.
-      await audioContext.audioWorklet.addModule(new URL('pcm-capture-worklet.js', document.baseURI).href)
+      await audioContext.audioWorklet.addModule(
+        new URL('pcm-capture-worklet.js', document.baseURI).href
+      )
       node = new AudioWorkletNode(audioContext, 'pcm-capture', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
@@ -139,7 +154,12 @@ function App() {
     try {
       const micStream = await navigator.mediaDevices.getUserMedia({
         // Automatic gain is off: it amplifies room noise during pauses, which blurs where speech ends.
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+          channelCount: 1
+        },
         video: false
       })
       cleanups.push(await streamTrackToMain(micStream, 1))
@@ -150,7 +170,8 @@ function App() {
 
   // Describes the final-transcription job when it concerns the given meeting folder.
   const finalTranscriptLabel = (folder) => {
-    if (!finalTranscriptStatus || finalTranscriptStatus.folder !== folder) return { running: false, text: '' }
+    if (!finalTranscriptStatus || finalTranscriptStatus.folder !== folder)
+      return { running: false, text: '' }
     const { state, progress = 0, message } = finalTranscriptStatus
     if (state === 'running') {
       return { running: true, text: `Gerando transcrição final… ${Math.round(progress * 100)}%` }
@@ -180,7 +201,15 @@ function App() {
   // Saved setup values take precedence over defaults supplied through .env.
   useEffect(() => {
     Promise.all([window.api.getDefaultMeetingProfile(), window.api.getMeetingSettings()])
-      .then(([profile, settings]) => setFormData((current) => ({ ...current, ...profile, ...settings, showLivePreview: false, transcriptCollapsed: true })))
+      .then(([profile, settings]) =>
+        setFormData((current) => ({
+          ...current,
+          ...profile,
+          ...settings,
+          showLivePreview: false,
+          transcriptCollapsed: true
+        }))
+      )
       .catch((err) => console.error('Error loading meeting settings:', err))
       .finally(() => setHasLoadedSettings(true))
   }, [])
@@ -260,11 +289,19 @@ function App() {
 
     window.api.onMeetingSaved((folder) => {
       setSavedMeetingFolder(folder || '')
-      window.api.getSavedMeetings().then(setSavedSessions).catch(() => {})
+      window.api
+        .getSavedMeetings()
+        .then(setSavedSessions)
+        .catch(() => {})
     })
 
     // Listen for AI assistant updates
     window.api.onAiAnswerStart((data) => {
+      // Only a finished answer becomes "previous"; one interrupted by a newer question is dropped.
+      const finished = completedAnswerRef.current
+      if (finished) setPreviousAnswers((current) => [finished, ...current].slice(0, 2))
+      completedAnswerRef.current = null
+      setCurrentQuestion(data?.question || '')
       setAiAnswer('')
       setAiProvider('')
       setAiSources([])
@@ -289,9 +326,17 @@ function App() {
 
     window.api.onAiAnswer((data) => {
       if (data && typeof data === 'object') {
+        const sources = Array.isArray(data.sources) ? data.sources : []
+        completedAnswerRef.current = {
+          question: data.question || '',
+          answer: data.answer,
+          provider: data.provider,
+          sources
+        }
+        if (data.question) setCurrentQuestion(data.question)
         setAiAnswer(data.answer)
         setAiProvider(data.provider)
-        setAiSources(Array.isArray(data.sources) ? data.sources : [])
+        setAiSources(sources)
         setAiLatency(data.latency || null)
         setIsAnswerStreaming(false)
         setAnswerStatus('Resposta pronta')
@@ -335,8 +380,35 @@ function App() {
     }
   }
 
+  // Grows or shrinks the window so the answers fit, as long as automatic height is on.
+  useEffect(() => {
+    if (!isSetupComplete || !formData.autoHeight) return
+    const area = answerAreaRef.current
+    const content = answerContentRef.current
+    if (!area || !content || typeof ResizeObserver === 'undefined') return
+    let timer = null
+    const fit = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        // Everything around the answers stays as it is; only the answers' own height changes.
+        const needed = window.innerHeight - area.clientHeight + content.offsetHeight + 2
+        window.api.fitWindowHeight(Math.ceil(needed))
+      }, 120)
+    }
+    const observer = new ResizeObserver(fit)
+    observer.observe(content)
+    fit()
+    return () => {
+      clearTimeout(timer)
+      observer.disconnect()
+    }
+  }, [isSetupComplete, formData.autoHeight, formData.transcriptCollapsed])
+
   const handleStop = () => {
     window.api.stopMeeting()
+    completedAnswerRef.current = null
+    setPreviousAnswers([])
+    setCurrentQuestion('')
     setTranscription(null)
     setTranscriptionHistory([])
     setAiAnswer('')
@@ -428,8 +500,8 @@ function App() {
     border: '1px solid rgba(255, 255, 255, 0.08)',
     borderRadius: '10px',
     color: '#ffffff',
-    padding: '10px 14px',
-    fontSize: '0.9rem',
+    padding: '0.5rem 0.75rem',
+    fontSize: '0.85rem',
     fontFamily: 'inherit',
     outline: 'none',
     transition: 'border-color 0.2s, background 0.2s'
@@ -450,21 +522,18 @@ function App() {
       <div
         className="app-shell setup-shell"
         style={{
-          width: 'min(860px, 100%)',
-          maxWidth: '860px',
-          height: '600px',
+          width: '100%',
+          height: '100%',
           display: 'flex',
           flexDirection: 'column',
           background: 'rgba(15, 15, 20, 0.95)',
           backdropFilter: 'blur(30px)',
-          borderRadius: '28px',
+          borderRadius: '16px',
           border: '1px solid rgba(255, 255, 255, 0.08)',
           color: '#ffffff',
           fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
           boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8)',
-          padding: '24px 30px 20px 30px',
           boxSizing: 'border-box',
-          justifyContent: 'space-between',
           overflow: 'hidden',
           position: 'relative'
         }}
@@ -543,16 +612,21 @@ function App() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            flex: '0 0 30px',
             height: '30px',
-            margin: '-12px -18px 10px',
             padding: '0 12px',
             background: 'rgba(30, 41, 59, 0.98)',
             borderBottom: '2px solid #22d3ee',
             WebkitAppRegion: 'drag',
+            cursor: 'grab',
             userSelect: 'none'
           }}
+          title="Arraste para mover a janela"
         >
-          <span style={{ fontSize: '0.72rem', color: '#22d3ee', fontWeight: '600' }}>
+          <span
+            className="bar-title"
+            style={{ fontSize: '0.72rem', color: '#22d3ee', fontWeight: '600' }}
+          >
             🛸 Copilot de reuniões com IA
           </span>
           <div style={{ display: 'flex', gap: '6px', WebkitAppRegion: 'no-drag' }}>
@@ -594,13 +668,13 @@ function App() {
           <div
             style={{
               position: 'absolute',
-              top: 0,
+              top: '30px',
               left: 0,
               right: 0,
               bottom: 0,
               background: 'rgba(10, 10, 15, 0.98)',
-              borderRadius: '28px',
-              padding: '30px',
+              borderRadius: '0 0 16px 16px',
+              padding: 'clamp(12px, 3vw, 24px)',
               boxSizing: 'border-box',
               display: 'flex',
               flexDirection: 'column',
@@ -685,7 +759,14 @@ function App() {
                     </button>
                   )}
                   {selectedSession.folder && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        flexWrap: 'wrap'
+                      }}
+                    >
                       <button
                         disabled={finalTranscriptLabel(selectedSession.folder).running}
                         onClick={() => window.api.generateFinalTranscript(selectedSession.folder)}
@@ -711,20 +792,27 @@ function App() {
                       </span>
                     </div>
                   )}
-                  {Array.isArray(selectedSession.data.finalTranscript || selectedSession.data.transcript)
-                    ? (selectedSession.data.finalTranscript || selectedSession.data.transcript).map((entry, idx) => (
-                        <div
-                          key={idx}
-                          style={{ fontSize: '0.85rem', color: '#94a3b8', lineHeight: '1.5' }}
-                        >
-                          <strong style={{ color: entry.speaker === 'client' ? '#67e8f9' : '#cbd5e1' }}>
-                            {{ client: 'Cliente', me: 'Eu', manual: 'Pergunta manual' }[entry.speaker] ||
-                              'Participante'}
-                            :
-                          </strong>{' '}
-                          {entry.text}
-                        </div>
-                      ))
+                  {Array.isArray(
+                    selectedSession.data.finalTranscript || selectedSession.data.transcript
+                  )
+                    ? (selectedSession.data.finalTranscript || selectedSession.data.transcript).map(
+                        (entry, idx) => (
+                          <div
+                            key={idx}
+                            style={{ fontSize: '0.85rem', color: '#94a3b8', lineHeight: '1.5' }}
+                          >
+                            <strong
+                              style={{ color: entry.speaker === 'client' ? '#67e8f9' : '#cbd5e1' }}
+                            >
+                              {{ client: 'Cliente', me: 'Eu', manual: 'Pergunta manual' }[
+                                entry.speaker
+                              ] || 'Participante'}
+                              :
+                            </strong>{' '}
+                            {entry.text}
+                          </div>
+                        )
+                      )
                     : (selectedSession.data.conversationHistory || [])
                         .filter((msg) => msg.role === 'user')
                         .map((msg, idx) => (
@@ -779,405 +867,476 @@ function App() {
           </div>
         )}
 
-        {/* Config Form Fields */}
-        <div>
-          <h2
-            style={{
-              margin: '0 0 4px 0',
-              fontSize: '1.6rem',
-              color: '#22d3ee',
-              fontWeight: '700',
-              letterSpacing: '0.5px'
-            }}
-          >
-            🛸 Configuração do Copilot
-          </h2>
-          <p style={{ margin: '0 0 20px 0', fontSize: '0.9rem', color: '#64748b' }}>
-            Descreva a conversa e escolha as fontes locais que poderão ajudar nas respostas.
-          </p>
+        <div className="setup-body">
+          {/* Config Form Fields */}
+          <div>
+            <h2
+              style={{
+                margin: '0 0 4px 0',
+                fontSize: '1.3rem',
+                color: '#22d3ee',
+                fontWeight: '700',
+                letterSpacing: '0.5px'
+              }}
+            >
+              🛸 Configuração do Copilot
+            </h2>
+            <p style={{ margin: '0 0 1rem 0', fontSize: '0.82rem', color: '#64748b' }}>
+              Descreva a conversa e escolha as fontes locais que poderão ajudar nas respostas.
+            </p>
 
-          <div className="setup-form-columns" style={{ display: 'flex', gap: '30px' }}>
-            {/* Left Form Column */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                  Contexto da reunião
-                </label>
-                <textarea
-                  value={formData.meetingContext}
-                  onChange={(e) => setFormData({ ...formData, meetingContext: e.target.value })}
-                  placeholder="Ex.: daily da equipe, alinhamento técnico ou conversa com cliente; pauta e termos importantes..."
-                  style={{ ...inputStyle, height: '88px', resize: 'none' }}
-                  onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
-                  onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
-                />
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                  Projetos para consultar
-                </label>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-
-                  <button type="button" onClick={selectProjectFolders} style={folderButtonStyle}>
-                    Buscar pastas
-                  </button>
-                  <button
-                    type="button"
-                    onClick={clearProjectFolders}
-                    disabled={!formData.projectPaths}
-                    style={{ ...folderButtonStyle, color: '#94a3b8', cursor: formData.projectPaths ? 'pointer' : 'default' }}
-                  >
-                    Limpar
-                  </button>
+            <div className="setup-form-columns" style={{ display: 'flex', gap: '1.5rem' }}>
+              {/* Left Form Column */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                    Contexto da reunião
+                  </label>
+                  <textarea
+                    value={formData.meetingContext}
+                    onChange={(e) => setFormData({ ...formData, meetingContext: e.target.value })}
+                    placeholder="Ex.: daily da equipe, alinhamento técnico ou conversa com cliente; pauta e termos importantes..."
+                    style={{ ...inputStyle, height: '88px', resize: 'none' }}
+                    onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
+                    onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
+                  />
                 </div>
-                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                  {formData.projectPaths ? `${formData.projectPaths.split('\n').filter(Boolean).length} projeto(s) selecionado(s):` : 'Nenhum projeto selecionado. Opcional: escolha até duas pastas.'}
-                </span>
-                {formData.projectPaths.split('\n').filter(Boolean).map((path) => <div key={path} className="source-path" title={path}>{path}</div>)}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                  Vault do Obsidian
-                </label>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-
-                  <button type="button" onClick={selectObsidianFolder} style={folderButtonStyle}>
-                    Buscar pasta
-                  </button>
-                  <button
-                    type="button"
-                    onClick={clearObsidianFolder}
-                    disabled={!formData.obsidianVaultPath}
-                    style={{ ...folderButtonStyle, color: '#94a3b8', cursor: formData.obsidianVaultPath ? 'pointer' : 'default' }}
-                  >
-                    Limpar
-                  </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                    Projetos para consultar
+                  </label>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button type="button" onClick={selectProjectFolders} style={folderButtonStyle}>
+                      Buscar pastas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearProjectFolders}
+                      disabled={!formData.projectPaths}
+                      style={{
+                        ...folderButtonStyle,
+                        color: '#94a3b8',
+                        cursor: formData.projectPaths ? 'pointer' : 'default'
+                      }}
+                    >
+                      Limpar
+                    </button>
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                    {formData.projectPaths
+                      ? `${formData.projectPaths.split('\n').filter(Boolean).length} projeto(s) selecionado(s):`
+                      : 'Nenhum projeto selecionado. Opcional: escolha até duas pastas.'}
+                  </span>
+                  {formData.projectPaths
+                    .split('\n')
+                    .filter(Boolean)
+                    .map((path) => (
+                      <div key={path} className="source-path" title={path}>
+                        {path}
+                      </div>
+                    ))}
                 </div>
-                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                  {formData.obsidianVaultPath ? 'Vault selecionado:' : 'Nenhum vault selecionado (opcional).'}
-                </span>
-                {formData.obsidianVaultPath && <div className="source-path" title={formData.obsidianVaultPath}>{formData.obsidianVaultPath}</div>}
-              </div>
-              <div className="harness-destination">
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Destino das transcrições no Harness</label>
-                <button type="button" style={folderButtonStyle} onClick={async () => {
-                  const result = await window.api.selectFolders(false)
-                  if (!result?.canceled) setFormData((current) => ({ ...current, harnessPath: result.filePaths[0] || '' }))
-                }}>Selecionar pasta</button>
-                <div className="source-path">{formData.harnessPath || 'Selecione a pasta para exportar as transcrições finais.'}</div>
-                <small style={{ color: '#94a3b8' }}>Se houver uma subpasta HARNESS, o Markdown será salvo dentro dela.</small>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                  Saída de áudio para ouvir
-                </label>
-                <select
-                  value={formData.audioOutputDevice}
-                  onChange={(e) => setFormData({ ...formData, audioOutputDevice: e.target.value })}
-                  style={inputStyle}
-                  title="O copilot ouvirá o monitor desta saída"
-                >
-                  <option value="">Saída padrão do sistema</option>
-                  {audioOutputs.map((output) => (
-                    <option key={output.id} value={output.id}>
-                      {output.label}
-                    </option>
-                  ))}
-                </select>
-                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                  O copilot ouvirá o áudio reproduzido nessa saída.
-                </span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                  Modelo de transcrição
-                </label>
-                <select
-                  value={formData.transcriberModel}
-                  onChange={(e) => setFormData({ ...formData, transcriberModel: e.target.value })}
-                  style={inputStyle}
-                >
-                  <option value="" disabled>
-                    {transcriptionModels.length ? 'Selecione um modelo' : 'Nenhum modelo encontrado'}
-                  </option>
-                  {transcriptionModels.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-                <span
-                  style={{
-                    fontSize: '0.72rem',
-                    color: transcriptionModels.length ? '#64748b' : '#f87171'
-                  }}
-                >
-                  {transcriptionModels.length
-                    ? 'Modelo Whisper local usado para transformar áudio em texto.'
-                    : 'Nenhum modelo Whisper foi encontrado na pasta models.'}
-                  {!transcriberStatus.binaryFound && (
-                    <span style={{ display: 'block', marginTop: '4px' }}>
-                      Adaptador Whisper ausente. Execute <code>npm run whisper:build</code>.
-                    </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                    Vault do Obsidian
+                  </label>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button type="button" onClick={selectObsidianFolder} style={folderButtonStyle}>
+                      Buscar pasta
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearObsidianFolder}
+                      disabled={!formData.obsidianVaultPath}
+                      style={{
+                        ...folderButtonStyle,
+                        color: '#94a3b8',
+                        cursor: formData.obsidianVaultPath ? 'pointer' : 'default'
+                      }}
+                    >
+                      Limpar
+                    </button>
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                    {formData.obsidianVaultPath
+                      ? 'Vault selecionado:'
+                      : 'Nenhum vault selecionado (opcional).'}
+                  </span>
+                  {formData.obsidianVaultPath && (
+                    <div className="source-path" title={formData.obsidianVaultPath}>
+                      {formData.obsidianVaultPath}
+                    </div>
                   )}
-                </span>
-              </div>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                </div>
+                <div className="harness-destination">
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                    Destino das transcrições no Harness
+                  </label>
+                  <button
+                    type="button"
+                    style={folderButtonStyle}
+                    onClick={async () => {
+                      const result = await window.api.selectFolders(false)
+                      if (!result?.canceled)
+                        setFormData((current) => ({
+                          ...current,
+                          harnessPath: result.filePaths[0] || ''
+                        }))
+                    }}
+                  >
+                    Selecionar pasta
+                  </button>
+                  <div className="source-path">
+                    {formData.harnessPath ||
+                      'Selecione a pasta para exportar as transcrições finais.'}
+                  </div>
+                  <small style={{ color: '#94a3b8' }}>
+                    Se houver uma subpasta HARNESS, o Markdown será salvo dentro dela.
+                  </small>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                    Idioma
+                    Saída de áudio para ouvir
                   </label>
                   <select
-                    value={formData.language}
-                    onChange={(e) => setFormData({ ...formData, language: e.target.value })}
+                    value={formData.audioOutputDevice}
+                    onChange={(e) =>
+                      setFormData({ ...formData, audioOutputDevice: e.target.value })
+                    }
                     style={inputStyle}
+                    title="O copilot ouvirá o monitor desta saída"
                   >
-                    <option value="pt-BR">Português</option>
-                    <option value="en-US">Inglês</option>
+                    <option value="">Saída padrão do sistema</option>
+                    {audioOutputs.map((output) => (
+                      <option key={output.id} value={output.id}>
+                        {output.label}
+                      </option>
+                    ))}
                   </select>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                    O copilot ouvirá o áudio reproduzido nessa saída.
+                  </span>
                 </div>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                    Modelo OpenAI
+                    Modelo de transcrição
                   </label>
                   <select
-                    value={formData.openaiModel}
-                    onChange={(e) => setFormData({ ...formData, openaiModel: e.target.value })}
+                    value={formData.transcriberModel}
+                    onChange={(e) => setFormData({ ...formData, transcriberModel: e.target.value })}
                     style={inputStyle}
                   >
-                    <option value="gpt-6-luna">GPT-6 Luna</option>
-                    <option value="gpt-4o-mini">GPT-4o Mini</option>
+                    <option value="" disabled>
+                      {transcriptionModels.length
+                        ? 'Selecione um modelo'
+                        : 'Nenhum modelo encontrado'}
+                    </option>
+                    {transcriptionModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.label}
+                      </option>
+                    ))}
                   </select>
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      color: transcriptionModels.length ? '#64748b' : '#f87171'
+                    }}
+                  >
+                    {transcriptionModels.length
+                      ? 'Modelo Whisper local usado para transformar áudio em texto.'
+                      : 'Nenhum modelo Whisper foi encontrado na pasta models.'}
+                    {!transcriberStatus.binaryFound && (
+                      <span style={{ display: 'block', marginTop: '4px' }}>
+                        Adaptador Whisper ausente. Execute <code>npm run whisper:build</code>.
+                      </span>
+                    )}
+                  </span>
                 </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
-                <input
-                  type="checkbox"
-                  id="useOllama"
-                  checked={formData.useOllama || false}
-                  onChange={(e) => setFormData({ ...formData, useOllama: e.target.checked })}
-                  style={{
-                    cursor: 'pointer',
-                    width: '16px',
-                    height: '16px',
-                    accentColor: '#22d3ee'
-                  }}
-                />
-                <label
-                  htmlFor="useOllama"
-                  className="text-content"
-                  style={{
-                    fontSize: '0.85rem',
-                    color: '#cbd5e1',
-                    fontWeight: '600',
-                    cursor: 'pointer'
-                  }}
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                      Idioma
+                    </label>
+                    <select
+                      value={formData.language}
+                      onChange={(e) => setFormData({ ...formData, language: e.target.value })}
+                      style={inputStyle}
+                    >
+                      <option value="pt-BR">Português</option>
+                      <option value="en-US">Inglês</option>
+                    </select>
+                  </div>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                      Modelo OpenAI
+                    </label>
+                    <select
+                      value={formData.openaiModel}
+                      onChange={(e) => setFormData({ ...formData, openaiModel: e.target.value })}
+                      style={inputStyle}
+                    >
+                      <option value="gpt-6-luna">GPT-6 Luna</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini</option>
+                    </select>
+                  </div>
+                </div>
+                <div
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}
                 >
-                  Usar modelo local do Ollama (gemma2:2b / offline)
-                </label>
+                  <input
+                    type="checkbox"
+                    id="useOllama"
+                    checked={formData.useOllama || false}
+                    onChange={(e) => setFormData({ ...formData, useOllama: e.target.checked })}
+                    style={{
+                      cursor: 'pointer',
+                      width: '16px',
+                      height: '16px',
+                      accentColor: '#22d3ee'
+                    }}
+                  />
+                  <label
+                    htmlFor="useOllama"
+                    className="text-content"
+                    style={{
+                      fontSize: '0.85rem',
+                      color: '#cbd5e1',
+                      fontWeight: '600',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Usar modelo local do Ollama (gemma2:2b / offline)
+                  </label>
+                </div>
+              </div>
+
+              {/* Right Form Column */}
+              <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                    Como serão usadas as fontes locais
+                  </label>
+                  <textarea
+                    value="Na próxima rajada, o app vai ler localmente os projetos e o vault indicados acima para encontrar respostas rápidas, mesmo se o MCP do Obsidian não responder."
+                    readOnly
+                    style={{ ...inputStyle, height: '70px', resize: 'none' }}
+                    onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
+                    onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                    Privacidade
+                  </label>
+                  <textarea
+                    value="A transcrição é local. Quando você usar um provedor de IA em nuvem, a pergunta e o contexto necessário para respondê-la poderão ser enviados ao provedor."
+                    readOnly
+                    style={{ ...inputStyle, height: '70px', resize: 'none' }}
+                    onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
+                    onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
+                  />
+                </div>
+                {indexStatus && (
+                  <div
+                    style={{
+                      fontSize: '0.78rem',
+                      lineHeight: '1.45',
+                      color: indexStatus.errors?.length ? '#fbbf24' : '#86efac',
+                      padding: '9px 11px',
+                      borderRadius: '10px',
+                      background: 'rgba(255,255,255,0.03)'
+                    }}
+                  >
+                    Índice local: {indexStatus.files} arquivo(s), {indexStatus.chunks} trecho(s).
+                    {indexStatus.errors?.length ? ` ${indexStatus.errors[0]}` : ''}
+                  </div>
+                )}
               </div>
             </div>
+          </div>
 
-            {/* Right Form Column */}
-            <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                  Como serão usadas as fontes locais
-                </label>
-                <textarea
-                  value="Na próxima rajada, o app vai ler localmente os projetos e o vault indicados acima para encontrar respostas rápidas, mesmo se o MCP do Obsidian não responder."
-                  readOnly
-                  style={{ ...inputStyle, height: '70px', resize: 'none' }}
-                  onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
-                  onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
-                />
+          {/* Saved Sessions list at the bottom */}
+          <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '10px' }}>
+            <h4
+              style={{
+                margin: '0 0 8px 0',
+                fontSize: '0.85rem',
+                color: '#cbd5e1',
+                fontWeight: '600'
+              }}
+            >
+              📂 Histórico de sessões salvas
+            </h4>
+            {exportNotice && (
+              <div
+                role={exportNotice.error ? 'alert' : 'status'}
+                style={{
+                  padding: '10px',
+                  marginBottom: '10px',
+                  borderRadius: '8px',
+                  background: 'rgba(255,255,255,0.06)',
+                  color: exportNotice.error ? '#f87171' : '#86efac',
+                  fontSize: '0.8rem',
+                  overflowWrap: 'anywhere',
+                  userSelect: 'text'
+                }}
+              >
+                {exportNotice.text}
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                  Privacidade
-                </label>
-                <textarea
-                  value="A transcrição é local. Quando você usar um provedor de IA em nuvem, a pergunta e o contexto necessário para respondê-la poderão ser enviados ao provedor."
-                  readOnly
-                  style={{ ...inputStyle, height: '70px', resize: 'none' }}
-                  onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
-                  onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
-                />
-              </div>
-              {indexStatus && (
+            )}
+            {savedMeetingFolder && (
+              <button
+                onClick={() => window.api.openMeetingFolder(savedMeetingFolder)}
+                style={{
+                  margin: '0 0 8px 0',
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  color: '#4ade80',
+                  cursor: 'pointer',
+                  fontSize: '0.78rem',
+                  textAlign: 'left'
+                }}
+              >
+                Áudio e transcrição salvos em {savedMeetingFolder}
+                {finalTranscriptLabel(savedMeetingFolder).text &&
+                  ` — ${finalTranscriptLabel(savedMeetingFolder).text}`}
+                {finalTranscriptStatus?.folder === savedMeetingFolder &&
+                  finalTranscriptStatus.state === 'done' &&
+                  ' — transcrição final pronta'}
+              </button>
+            )}
+            <div
+              style={{
+                display: 'flex',
+                gap: '12px',
+                overflowX: 'auto',
+                paddingBottom: '4px'
+              }}
+            >
+              {savedSessions.length === 0 ? (
                 <div
                   style={{
-                    fontSize: '0.78rem',
-                    lineHeight: '1.45',
-                    color: indexStatus.errors?.length ? '#fbbf24' : '#86efac',
-                    padding: '9px 11px',
-                    borderRadius: '10px',
-                    background: 'rgba(255,255,255,0.03)'
+                    fontSize: '0.8rem',
+                    color: '#64748b',
+                    fontStyle: 'italic',
+                    padding: '10px 0'
                   }}
                 >
-                  Índice local: {indexStatus.files} arquivo(s), {indexStatus.chunks} trecho(s).
-                  {indexStatus.errors?.length ? ` ${indexStatus.errors[0]}` : ''}
+                  Nenhuma reunião salva. Inicie uma reunião para registrar uma.
                 </div>
+              ) : (
+                savedSessions.map((session, index) => (
+                  <div
+                    key={index}
+                    onClick={(event) => {
+                      if (event.target.closest('button, input, a, [data-session-action]')) return
+                      setSelectedSession(session)
+                    }}
+                    style={{
+                      flexShrink: 0,
+                      width: '230px',
+                      background: 'rgba(255, 255, 255, 0.02)',
+                      border: '1px solid rgba(255, 255, 255, 0.05)',
+                      borderRadius: '12px',
+                      padding: '8px 12px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      boxSizing: 'border-box'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'
+                      e.currentTarget.style.borderColor = 'rgba(34, 211, 238, 0.3)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.02)'
+                      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.05)'
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: '0.8rem',
+                        color: '#f1f5f9',
+                        fontWeight: '600',
+                        textOverflow: 'ellipsis',
+                        overflow: 'hidden',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {session.data.meeting?.context || 'Reunião sem contexto'}
+                    </div>
+                    <div
+                      className="session-card-details"
+                      style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '2px' }}
+                    >
+                      {session.data.meeting?.obsidianVaultPath || 'Sem vault configurado'}
+                    </div>
+                    {session.folder && Array.isArray(session.data.finalTranscript) && (
+                      <div data-session-action onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          style={{ ...folderButtonStyle, marginTop: '8px' }}
+                          disabled={exportStatus[session.folder]?.busy}
+                          title={
+                            formData.harnessPath || 'Clique para selecionar o destino do Harness'
+                          }
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            handleExportToHarness(session)
+                          }}
+                        >
+                          {exportStatus[session.folder]?.busy
+                            ? 'Salvando…'
+                            : 'Enviar para o Harness'}
+                        </button>
+                      </div>
+                    )}
+                    <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '6px' }}>
+                      {new Date(session.data.timestamp).toLocaleDateString('pt-BR')} às{' '}
+                      {new Date(session.data.timestamp).toLocaleTimeString('pt-BR', {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </div>
+                  </div>
+                ))
               )}
             </div>
           </div>
-        </div>
 
-        {/* Saved Sessions list at the bottom */}
-        <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '10px' }}>
-          <h4
-            style={{
-              margin: '0 0 8px 0',
-              fontSize: '0.85rem',
-              color: '#cbd5e1',
-              fontWeight: '600'
-            }}
-          >
-            📂 Histórico de sessões salvas
-          </h4>
-          {exportNotice && (
-            <div role={exportNotice.error ? 'alert' : 'status'} style={{ padding: '10px', marginBottom: '10px', borderRadius: '8px', background: 'rgba(255,255,255,0.06)', color: exportNotice.error ? '#f87171' : '#86efac', fontSize: '0.8rem', overflowWrap: 'anywhere', userSelect: 'text' }}>
-              {exportNotice.text}
-            </div>
-          )}
-          {savedMeetingFolder && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
             <button
-              onClick={() => window.api.openMeetingFolder(savedMeetingFolder)}
+              onClick={handleStart}
+              disabled={
+                isPreparingSources || !transcriberStatus.ready || !formData.transcriberModel
+              }
               style={{
-                margin: '0 0 8px 0',
-                background: 'none',
+                background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
                 border: 'none',
-                padding: 0,
-                color: '#4ade80',
+                color: '#ffffff',
+                padding: '0.6rem 1.5rem',
+                borderRadius: '12px',
+                fontSize: '0.88rem',
+                fontWeight: '600',
                 cursor: 'pointer',
-                fontSize: '0.78rem',
-                textAlign: 'left'
+                boxShadow: '0 4px 14px rgba(6, 182, 212, 0.35)',
+                transition: 'all 0.2s'
               }}
+              onMouseEnter={(e) => (e.target.style.boxShadow = '0 6px 20px rgba(6, 182, 212, 0.5)')}
+              onMouseLeave={(e) =>
+                (e.target.style.boxShadow = '0 4px 14px rgba(6, 182, 212, 0.35)')
+              }
             >
-              Áudio e transcrição salvos em {savedMeetingFolder}
-              {finalTranscriptLabel(savedMeetingFolder).text &&
-                ` — ${finalTranscriptLabel(savedMeetingFolder).text}`}
-              {finalTranscriptStatus?.folder === savedMeetingFolder &&
-                finalTranscriptStatus.state === 'done' &&
-                ' — transcrição final pronta'}
+              {isPreparingSources
+                ? 'Preparando fontes locais…'
+                : !transcriberStatus.binaryFound
+                  ? 'Adaptador Whisper ausente'
+                  : transcriptionModels.length === 0
+                    ? 'Modelo Whisper ausente'
+                    : '🚀 Iniciar reunião'}
             </button>
-          )}
-          <div
-            style={{
-              display: 'flex',
-              gap: '12px',
-              overflowX: 'auto',
-              paddingBottom: '4px'
-            }}
-          >
-            {savedSessions.length === 0 ? (
-              <div
-                style={{
-                  fontSize: '0.8rem',
-                  color: '#64748b',
-                  fontStyle: 'italic',
-                  padding: '10px 0'
-                }}
-              >
-                Nenhuma reunião salva. Inicie uma reunião para registrar uma.
-              </div>
-            ) : (
-              savedSessions.map((session, index) => (
-                <div
-                  key={index}
-                  onClick={(event) => {
-                    if (event.target.closest('button, input, a, [data-session-action]')) return
-                    setSelectedSession(session)
-                  }}
-                  style={{
-                    flexShrink: 0,
-                    width: '230px',
-                    background: 'rgba(255, 255, 255, 0.02)',
-                    border: '1px solid rgba(255, 255, 255, 0.05)',
-                    borderRadius: '12px',
-                    padding: '8px 12px',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    boxSizing: 'border-box'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'
-                    e.currentTarget.style.borderColor = 'rgba(34, 211, 238, 0.3)'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.02)'
-                    e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.05)'
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: '0.8rem',
-                      color: '#f1f5f9',
-                      fontWeight: '600',
-                      textOverflow: 'ellipsis',
-                      overflow: 'hidden',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    {session.data.meeting?.context || 'Reunião sem contexto'}
-                  </div>
-                  <div
-                    className="session-card-details"
-                    style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '2px' }}
-                  >
-                    {session.data.meeting?.obsidianVaultPath || 'Sem vault configurado'}
-                  </div>
-                  {session.folder && Array.isArray(session.data.finalTranscript) && (
-                    <div data-session-action onClick={(event) => event.stopPropagation()}>
-                      <button type="button" style={{ ...folderButtonStyle, marginTop: '8px' }}
-                        disabled={exportStatus[session.folder]?.busy}
-                        title={formData.harnessPath || 'Clique para selecionar o destino do Harness'}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          handleExportToHarness(session)
-                        }}>{exportStatus[session.folder]?.busy ? 'Salvando…' : 'Enviar para o Harness'}</button>
-                    </div>
-                  )}
-                  <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '6px' }}>
-                    {new Date(session.data.timestamp).toLocaleDateString('pt-BR')} às{' '}
-                    {new Date(session.data.timestamp).toLocaleTimeString('pt-BR', {
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
-                  </div>
-                </div>
-              ))
-            )}
           </div>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
-          <button
-            onClick={handleStart}
-            disabled={isPreparingSources || !transcriberStatus.ready || !formData.transcriberModel}
-            style={{
-              background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
-              border: 'none',
-              color: '#ffffff',
-              padding: '10px 28px',
-              borderRadius: '12px',
-              fontSize: '0.95rem',
-              fontWeight: '600',
-              cursor: 'pointer',
-              boxShadow: '0 4px 14px rgba(6, 182, 212, 0.35)',
-              transition: 'all 0.2s'
-            }}
-            onMouseEnter={(e) => (e.target.style.boxShadow = '0 6px 20px rgba(6, 182, 212, 0.5)')}
-            onMouseLeave={(e) => (e.target.style.boxShadow = '0 4px 14px rgba(6, 182, 212, 0.35)')}
-          >
-            {isPreparingSources
-              ? 'Preparando fontes locais…'
-              : !transcriberStatus.binaryFound
-                ? 'Adaptador Whisper ausente'
-                : transcriptionModels.length === 0
-                  ? 'Modelo Whisper ausente'
-                : '🚀 Iniciar reunião'}
-          </button>
         </div>
       </div>
     )
@@ -1187,14 +1346,13 @@ function App() {
     <div
       className={`app-shell hud-shell${formData.transcriptCollapsed ? ' transcript-collapsed' : ''}`}
       style={{
-        width: 'min(860px, 100%)',
-        maxWidth: '860px',
-        height: '600px',
+        width: '100%',
+        height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        background: 'rgba(15, 15, 20, 0.72)',
-        backdropFilter: 'blur(18px)',
-        borderRadius: '28px',
+        background: 'rgba(15, 15, 20, 0.62)',
+        backdropFilter: 'blur(16px)',
+        borderRadius: '16px',
         border: '1px solid rgba(255, 255, 255, 0.08)',
         color: '#ffffff',
         fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
@@ -1206,8 +1364,7 @@ function App() {
         .window-control-btn {
           -webkit-app-region: no-drag !important;
           cursor: pointer !important;
-          font-family: monospace !important;
-          font-size: 0.85rem !important;
+          font-size: 0.8rem !important;
           padding: 2px 6px !important;
           user-select: none !important;
         }
@@ -1271,9 +1428,11 @@ function App() {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          padding: '0 20px',
+          gap: '8px',
+          padding: '0 10px',
           height: '32px',
-          background: 'rgba(30, 41, 59, 0.98)',
+          flex: '0 0 32px',
+          background: 'rgba(30, 41, 59, 0.86)',
           borderBottom: '2px solid #22d3ee',
           WebkitAppRegion: 'drag',
           userSelect: 'none',
@@ -1283,20 +1442,23 @@ function App() {
         }}
       >
         <span
-          className="hud-topbar-title"
+          className="hud-topbar-title bar-title"
           style={{ fontSize: '0.75rem', color: '#22d3ee', fontWeight: '600' }}
+          title="Copilot de reuniões com IA — arraste para mover"
         >
-          🛸 Copilot de reuniões com IA
+          🛸 <span className="hide-narrow">Copilot de reuniões</span>
         </span>
         <div
           className="hud-window-controls"
-          style={{ display: 'flex', alignItems: 'center', gap: '12px', WebkitAppRegion: 'no-drag' }}
+          style={{ display: 'flex', alignItems: 'center', gap: '4px', WebkitAppRegion: 'no-drag' }}
         >
           <button
             type="button"
             onClick={toggleClickThrough}
             className="window-control-btn"
-            title={isClickThrough ? 'Ativar cliques na janela' : 'Deixar cliques passarem para trás'}
+            title={
+              isClickThrough ? 'Ativar cliques na janela' : 'Deixar cliques passarem para trás'
+            }
             style={{
               background: isClickThrough ? 'rgba(34, 211, 238, 0.18)' : 'none',
               border: '1px solid rgba(34, 211, 238, 0.3)',
@@ -1308,7 +1470,8 @@ function App() {
               WebkitAppRegion: 'no-drag'
             }}
           >
-            {isClickThrough ? 'Interagir' : 'Click-through'}
+            {isClickThrough ? '🖱️' : '👻'}
+            <span className="btn-label">{isClickThrough ? ' Interagir' : ' Atravessar'}</span>
           </button>
           <span
             onClick={handleStop}
@@ -1319,13 +1482,14 @@ function App() {
               padding: '4px 10px',
               borderRadius: '6px',
               border: '1px solid rgba(239, 68, 68, 0.35)',
-              marginRight: '8px',
+              marginRight: '4px',
               fontSize: '0.75rem',
               fontWeight: '600',
               cursor: 'pointer',
               transition: 'all 0.2s',
               WebkitAppRegion: 'no-drag'
             }}
+            title="Encerrar reunião e salvar a gravação"
             onMouseEnter={(e) => {
               e.target.style.background = 'rgba(239, 68, 68, 0.25)'
               e.target.style.transform = 'scale(1.03)'
@@ -1335,11 +1499,12 @@ function App() {
               e.target.style.transform = 'scale(1.0)'
             }}
           >
-            ⏹ Encerrar reunião
+            ⏹<span className="btn-label"> Encerrar</span>
           </span>
           <button
             onClick={() => window.api.minimize()}
             className="window-control-btn"
+            title="Minimizar"
             style={{
               background: 'none',
               border: 'none',
@@ -1359,11 +1524,12 @@ function App() {
               e.target.style.transform = 'scale(1.0)'
             }}
           >
-            [ ─ ]
+            ─
           </button>
           <button
             onClick={() => window.api.maximize()}
             className="window-control-btn"
+            title="Maximizar"
             style={{
               background: 'none',
               border: 'none',
@@ -1383,11 +1549,12 @@ function App() {
               e.target.style.transform = 'scale(1.0)'
             }}
           >
-            [ ▢ ]
+            ▢
           </button>
           <button
             onClick={() => window.api.close()}
             className="window-control-btn"
+            title="Fechar"
             style={{
               background: 'none',
               border: 'none',
@@ -1407,27 +1574,89 @@ function App() {
               e.target.style.transform = 'scale(1.0)'
             }}
           >
-            [ ✕ ]
+            ✕
           </button>
         </div>
       </div>
 
       <div className="hud-options">
-        <button type="button" onClick={() => {
-          const collapsed = !formData.transcriptCollapsed
-          setFormData((current) => ({ ...current, transcriptCollapsed: collapsed }))
-          window.api.setTranscriptCollapsed(collapsed)
-        }} aria-expanded={!formData.transcriptCollapsed}>
-          {formData.transcriptCollapsed ? 'Mostrar transcrição' : 'Ocultar transcrição'}
+        <button
+          type="button"
+          onClick={() => {
+            const collapsed = !formData.transcriptCollapsed
+            setFormData((current) => ({ ...current, transcriptCollapsed: collapsed }))
+            window.api.setTranscriptCollapsed(collapsed)
+          }}
+          aria-expanded={!formData.transcriptCollapsed}
+          title={
+            formData.transcriptCollapsed
+              ? 'Mostrar a transcrição ao vivo'
+              : 'Ocultar a transcrição ao vivo (ela continua sendo gravada)'
+          }
+        >
+          {formData.transcriptCollapsed ? '▶' : '◀'}
+          <span className="opt-label"> Transcrição</span>
         </button>
-        <label><input type="checkbox" checked={formData.showLivePreview} onChange={(e) => setFormData((current) => ({ ...current, showLivePreview: e.target.checked }))} /> Debug: fala em andamento</label>
-        <label><input type="checkbox" checked={formData.autoAnswer} onChange={(e) => {
-          const enabled = e.target.checked
-          setFormData((current) => ({ ...current, autoAnswer: enabled }))
-          window.api.setAutoAnswer(enabled)
-          if (!enabled) { setIsAnswerStreaming(false); setAnswerStatus('Respostas automáticas desativadas') }
-          else setAnswerStatus('Ouvindo')
-        }} /> Respostas automáticas</label>
+        <label title="Debug: mostra em verde o texto provisório da fala em andamento">
+          <input
+            type="checkbox"
+            checked={formData.showLivePreview}
+            onChange={(e) =>
+              setFormData((current) => ({ ...current, showLivePreview: e.target.checked }))
+            }
+          />{' '}
+          🐞<span className="opt-label"> Prévia</span>
+        </label>
+        <label title="Responder automaticamente às perguntas ouvidas. Desligado, só a pergunta manual consome tokens.">
+          <input
+            type="checkbox"
+            checked={formData.autoAnswer}
+            onChange={(e) => {
+              const enabled = e.target.checked
+              setFormData((current) => ({ ...current, autoAnswer: enabled }))
+              window.api.setAutoAnswer(enabled)
+              if (!enabled) {
+                setIsAnswerStreaming(false)
+                setAnswerStatus('Respostas automáticas desativadas')
+              } else setAnswerStatus('Ouvindo')
+            }}
+          />{' '}
+          🤖<span className="opt-label"> Auto</span>
+        </label>
+        <label title="Quantas respostas mostrar: a atual e até duas anteriores">
+          💬
+          <select
+            className="answer-count-select"
+            value={formData.answerCount}
+            onChange={(event) =>
+              setFormData((current) => ({ ...current, answerCount: Number(event.target.value) }))
+            }
+          >
+            <option value={1}>1</option>
+            <option value={2}>2</option>
+            <option value={3}>3</option>
+          </select>
+        </label>
+        <label title="Ajustar a altura da janela ao tamanho das respostas">
+          <input
+            type="checkbox"
+            checked={formData.autoHeight}
+            onChange={(event) =>
+              setFormData((current) => ({ ...current, autoHeight: event.target.checked }))
+            }
+          />{' '}
+          ↕<span className="opt-label"> Altura</span>
+        </label>
+        <label title="Mostrar o campo para digitar uma pergunta ao copiloto">
+          <input
+            type="checkbox"
+            checked={formData.showManualQuestion}
+            onChange={(event) =>
+              setFormData((current) => ({ ...current, showManualQuestion: event.target.checked }))
+            }
+          />{' '}
+          ✍️<span className="opt-label"> Pergunta</span>
+        </label>
       </div>
 
       {/* Main HUD Dashboard */}
@@ -1436,165 +1665,180 @@ function App() {
         style={{
           flex: 1,
           display: 'flex',
-          gap: '20px',
-          padding: '24px',
+          gap: 'clamp(8px, 1.6vw, 16px)',
+          padding: 'clamp(8px, 1.8vw, 18px)',
           overflow: 'hidden',
           boxSizing: 'border-box'
         }}
       >
         {/* Left Column: Live Audio Transcription History */}
-        {!formData.transcriptCollapsed && <div
-          className="hud-panel"
-          style={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            background: 'rgba(255, 255, 255, 0.02)',
-            borderRadius: '18px',
-            padding: '20px',
-            border: '1px solid rgba(255, 255, 255, 0.04)',
-            overflow: 'hidden'
-          }}
-        >
+        {!formData.transcriptCollapsed && (
           <div
-            className="hud-panel-header"
+            className="hud-panel"
             style={{
+              flex: 1,
               display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '14px',
-              flexWrap: 'wrap',
-              gap: '10px'
+              flexDirection: 'column',
+              background: 'rgba(255, 255, 255, 0.02)',
+              borderRadius: '14px',
+              padding: 'clamp(10px, 1.6vw, 16px)',
+              border: '1px solid rgba(255, 255, 255, 0.04)',
+              overflow: 'hidden'
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '1.2rem' }}>🎙️</span>
-              <h3
-                style={{
-                  margin: 0,
-                  fontSize: '1.1rem',
-                  color: '#cbd5e1',
-                  fontWeight: '600',
-                  letterSpacing: '0.5px'
-                }}
-              >
-                Transcrição ao vivo
-              </h3>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              {/* Audio Visualizer Badge */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  background:
-                    audioSource === 'MIC' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 211, 238, 0.15)',
-                  border:
-                    audioSource === 'MIC'
-                      ? '1px solid rgba(239, 68, 68, 0.3)'
-                      : '1px solid rgba(34, 211, 238, 0.3)',
-                  borderRadius: '20px',
-                  padding: '4px 10px',
-                  transition: 'all 0.3s ease'
-                }}
-              >
-                <div
+            <div
+              className="hud-panel-header"
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '14px',
+                flexWrap: 'wrap',
+                gap: '10px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1rem' }}>🎙️</span>
+                <h3
                   style={{
-                    width: '8px',
-                    height: '8px',
-                    borderRadius: '50%',
-                    background: audioSource === 'MIC' ? '#ef4444' : '#22d3ee',
-                    transform: `scale(${1 + (audioLevel / 100) * 0.8})`,
-                    boxShadow: audioSource === 'MIC' ? '0 0 10px #ef4444' : '0 0 10px #22d3ee',
-                    transition: 'transform 0.1s ease-out'
-                  }}
-                />
-                <span
-                  style={{
-                    fontSize: '0.7rem',
-                    fontWeight: '700',
-                    color: audioSource === 'MIC' ? '#fca5a5' : '#99f6e4',
+                    margin: 0,
+                    fontSize: '0.95rem',
+                    color: '#cbd5e1',
+                    fontWeight: '600',
                     letterSpacing: '0.5px'
                   }}
                 >
-                  {audioSource}
-                </span>
+                  Transcrição
+                </h3>
               </div>
 
-              {/* Ask Doubt Button */}
-              <button
-                onClick={handleToggleDoubt}
-                style={{
-                  background:
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {/* Audio Visualizer Badge */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background:
+                      audioSource === 'MIC'
+                        ? 'rgba(239, 68, 68, 0.15)'
+                        : 'rgba(34, 211, 238, 0.15)',
+                    border:
+                      audioSource === 'MIC'
+                        ? '1px solid rgba(239, 68, 68, 0.3)'
+                        : '1px solid rgba(34, 211, 238, 0.3)',
+                    borderRadius: '20px',
+                    padding: '4px 10px',
+                    transition: 'all 0.3s ease'
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      background: audioSource === 'MIC' ? '#ef4444' : '#22d3ee',
+                      transform: `scale(${1 + (audioLevel / 100) * 0.8})`,
+                      boxShadow: audioSource === 'MIC' ? '0 0 10px #ef4444' : '0 0 10px #22d3ee',
+                      transition: 'transform 0.1s ease-out'
+                    }}
+                  />
+                  <span
+                    style={{
+                      fontSize: '0.7rem',
+                      fontWeight: '700',
+                      color: audioSource === 'MIC' ? '#fca5a5' : '#99f6e4',
+                      letterSpacing: '0.5px'
+                    }}
+                  >
+                    {audioSource}
+                  </span>
+                </div>
+
+                {/* Ask Doubt Button */}
+                <button
+                  onClick={handleToggleDoubt}
+                  title={
                     audioSource === 'MIC'
-                      ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
-                      : 'rgba(255, 255, 255, 0.05)',
-                  border: audioSource === 'MIC' ? 'none' : '1px solid rgba(255, 255, 255, 0.08)',
-                  color: '#ffffff',
-                  padding: '6px 12px',
-                  borderRadius: '10px',
-                  cursor: 'pointer',
-                  fontSize: '0.75rem',
-                  fontWeight: '600',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  boxShadow: audioSource === 'MIC' ? '0 4px 12px rgba(239, 68, 68, 0.35)' : 'none',
-                  transition: 'all 0.2s ease'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'scale(1.03)'
-                  if (audioSource !== 'MIC') {
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'
+                      ? 'Parar de enviar sua fala ao copiloto'
+                      : 'Fazer uma pergunta ao copiloto falando no microfone'
                   }
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'scale(1.0)'
-                  if (audioSource !== 'MIC') {
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'
-                  }
-                }}
-              >
-                <span>🎙️</span>
-                <span>{audioSource === 'MIC' ? 'Cancelar' : 'Perguntar'}</span>
-              </button>
+                  style={{
+                    background:
+                      audioSource === 'MIC'
+                        ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
+                        : 'rgba(255, 255, 255, 0.05)',
+                    border: audioSource === 'MIC' ? 'none' : '1px solid rgba(255, 255, 255, 0.08)',
+                    color: '#ffffff',
+                    padding: '6px 12px',
+                    borderRadius: '10px',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: '600',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    boxShadow:
+                      audioSource === 'MIC' ? '0 4px 12px rgba(239, 68, 68, 0.35)' : 'none',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'scale(1.03)'
+                    if (audioSource !== 'MIC') {
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'scale(1.0)'
+                    if (audioSource !== 'MIC') {
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'
+                    }
+                  }}
+                >
+                  <span>🎙️</span>
+                  <span className="btn-label">
+                    {audioSource === 'MIC' ? 'Cancelar' : 'Perguntar'}
+                  </span>
+                </button>
+              </div>
+            </div>
+            <div
+              style={{
+                flex: 1,
+                overflowY: 'auto',
+                paddingRight: '6px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px'
+              }}
+            >
+              {transcriptionHistory.map((entry, index) => (
+                <div
+                  key={index}
+                  style={{ fontSize: '0.85rem', color: '#94a3b8', lineHeight: '1.5' }}
+                >
+                  <strong style={{ color: entry.speaker === 'client' ? '#67e8f9' : '#cbd5e1' }}>
+                    {entry.label}:
+                  </strong>{' '}
+                  {entry.text}
+                </div>
+              ))}
+              {formData.showLivePreview && transcription && (
+                <div
+                  style={{
+                    fontSize: '0.88rem',
+                    color: '#4ade80',
+                    fontWeight: '600',
+                    lineHeight: '1.5'
+                  }}
+                >
+                  {transcription.label}: {transcription.text}...
+                </div>
+              )}
+              <div ref={transcriptEndRef} />
             </div>
           </div>
-          <div
-            style={{
-              flex: 1,
-              overflowY: 'auto',
-              paddingRight: '6px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '10px'
-            }}
-          >
-            {transcriptionHistory.map((entry, index) => (
-              <div key={index} style={{ fontSize: '0.95rem', color: '#94a3b8', lineHeight: '1.5' }}>
-                <strong style={{ color: entry.speaker === 'client' ? '#67e8f9' : '#cbd5e1' }}>
-                  {entry.label}:
-                </strong>{' '}
-                {entry.text}
-              </div>
-            ))}
-            {formData.showLivePreview && transcription && (
-              <div
-                style={{
-                  fontSize: '1.05rem',
-                  color: '#4ade80',
-                  fontWeight: '600',
-                  lineHeight: '1.5'
-                }}
-              >
-                {transcription.label}: {transcription.text}...
-              </div>
-            )}
-            <div ref={transcriptEndRef} />
-          </div>
-        </div>}
+        )}
 
         {/* Right Column: AI Copilot Assistant Suggestions */}
         <div
@@ -1604,8 +1848,8 @@ function App() {
             display: 'flex',
             flexDirection: 'column',
             background: 'rgba(34, 211, 238, 0.02)',
-            borderRadius: '18px',
-            padding: '20px',
+            borderRadius: '14px',
+            padding: 'clamp(10px, 1.6vw, 16px)',
             border: '1px solid rgba(34, 211, 238, 0.08)',
             overflow: 'hidden'
           }}
@@ -1622,39 +1866,47 @@ function App() {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '1.2rem' }}>🧠</span>
+              <span style={{ fontSize: '1rem' }}>🧠</span>
               <div>
                 <h3
                   style={{
                     margin: 0,
-                    fontSize: '1.1rem',
+                    fontSize: '0.95rem',
                     color: '#22d3ee',
                     fontWeight: '600',
                     letterSpacing: '0.5px'
                   }}
                 >
-                  Resposta sugerida
+                  Resposta
                 </h3>
                 {indexStatus && (
                   <div
+                    className="bar-title hide-narrow"
+                    title={`Base local: ${indexStatus.files} arquivos, ${indexStatus.chunks} trechos`}
                     style={{
                       fontSize: '0.66rem',
                       color: indexStatus.errors?.length ? '#fbbf24' : '#86efac',
                       marginTop: '2px'
                     }}
                   >
-                    Base local: {indexStatus.files} arquivos · {indexStatus.chunks} trechos
+                    {indexStatus.files} arquivos
                   </div>
                 )}
-                <div style={{ fontSize: '0.66rem', color: '#94a3b8', marginTop: '2px' }}>
+                <div
+                  className="bar-title"
+                  title={answerStatus}
+                  style={{ fontSize: '0.66rem', color: '#94a3b8', marginTop: '2px' }}
+                >
                   {answerStatus}
                 </div>
               </div>
             </div>
             {aiProvider && (
               <span
+                className="hide-narrow"
+                title={`Fornecido por ${aiProvider}`}
                 style={{
-                  fontSize: '0.75rem',
+                  fontSize: '0.68rem',
                   color: '#64748b',
                   background: 'rgba(34, 211, 238, 0.08)',
                   padding: '2px 8px',
@@ -1663,15 +1915,17 @@ function App() {
                   fontWeight: '500'
                 }}
               >
-                Fornecido por {aiProvider}
+                {aiProvider}
               </span>
             )}
             {aiLatency && (
-              <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>
-                1º texto: {(aiLatency.firstTokenMs / 1000).toFixed(1)}s ·{' '}
-                {isAnswerStreaming
-                  ? 'gerando…'
-                  : `total: ${(aiLatency.totalMs / 1000).toFixed(1)}s`}
+              <span
+                className="hide-narrow"
+                title="Tempo até o primeiro texto / tempo total da resposta"
+                style={{ fontSize: '0.68rem', color: '#94a3b8' }}
+              >
+                ⏱ {(aiLatency.firstTokenMs / 1000).toFixed(1)}s
+                {isAnswerStreaming ? ' …' : ` / ${(aiLatency.totalMs / 1000).toFixed(1)}s`}
               </span>
             )}
             {indexStatus?.locations?.length > 1 && (
@@ -1712,91 +1966,130 @@ function App() {
                 cursor: 'pointer',
                 fontSize: '0.68rem'
               }}
+              title="Responder de novo à última pergunta"
             >
-              Tentar novamente
+              ↻<span className="btn-label"> Repetir</span>
             </button>
           </div>
           <div
             style={{
               flex: 1,
               overflowY: 'auto',
-              fontSize: '0.95rem',
+              fontSize: '0.88rem',
               lineHeight: '1.6',
               color: '#f1f5f9',
               paddingRight: '6px'
             }}
             className="markdown-content"
+            ref={answerAreaRef}
           >
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-              <input
-                aria-label="Pergunta manual"
-                value={manualQuestion}
-                onChange={(event) => setManualQuestion(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') handleManualQuestion()
-                }}
-                placeholder="Pergunte manualmente…"
-                style={{
-                  flex: 1,
-                  background: 'rgba(255,255,255,0.05)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  color: '#f8fafc',
-                  borderRadius: '8px',
-                  padding: '8px 10px',
-                  outline: 'none'
-                }}
-              />
-              <button
-                onClick={handleManualQuestion}
-                disabled={!manualQuestion.trim()}
-                style={{
-                  background: '#0891b2',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  padding: '0 12px',
-                  cursor: 'pointer',
-                  fontWeight: '600'
-                }}
-              >
-                Enviar
-              </button>
-            </div>
-            {aiAnswer ? (
-              <>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{aiAnswer}</ReactMarkdown>
-                {aiSources.length > 0 && (
-                  <div
+            <div ref={answerContentRef} style={{ display: 'flow-root' }}>
+              {formData.showManualQuestion && (
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                  <input
+                    aria-label="Pergunta manual"
+                    value={manualQuestion}
+                    onChange={(event) => setManualQuestion(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') handleManualQuestion()
+                    }}
+                    placeholder="Pergunte manualmente…"
                     style={{
-                      marginTop: '14px',
-                      paddingTop: '10px',
-                      borderTop: '1px solid rgba(255,255,255,0.06)',
-                      fontSize: '0.7rem',
-                      color: '#94a3b8',
-                      lineHeight: '1.5'
+                      flex: 1,
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      color: '#f8fafc',
+                      borderRadius: '8px',
+                      padding: '6px 10px',
+                      fontSize: '0.82rem',
+                      outline: 'none'
+                    }}
+                  />
+                  <button
+                    onClick={handleManualQuestion}
+                    disabled={!manualQuestion.trim()}
+                    style={{
+                      background: '#0891b2',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '0 12px',
+                      fontSize: '0.82rem',
+                      cursor: 'pointer',
+                      fontWeight: '600'
                     }}
                   >
-                    Base local consultada:{' '}
-                    {aiSources.map((source) => source.split('/').pop()).join(' · ')}
+                    Enviar
+                  </button>
+                </div>
+              )}
+              {aiAnswer ? (
+                <>
+                  {currentQuestion && (
+                    <div className="answer-question" title={currentQuestion}>
+                      ❓ {currentQuestion}
+                    </div>
+                  )}
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{aiAnswer}</ReactMarkdown>
+                  {/* Sources are debugging detail: shown only with the debug option (Prévia) on. */}
+                  {formData.showLivePreview && aiSources.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: '14px',
+                        paddingTop: '10px',
+                        borderTop: '1px solid rgba(255,255,255,0.06)',
+                        fontSize: '0.7rem',
+                        color: '#94a3b8',
+                        lineHeight: '1.5'
+                      }}
+                    >
+                      Base local consultada:{' '}
+                      {aiSources.map((source) => source.split('/').pop()).join(' · ')}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div
+                  style={{
+                    padding: '12px 0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#64748b',
+                    fontSize: '0.9rem',
+                    textAlign: 'center',
+                    lineHeight: '1.6'
+                  }}
+                >
+                  {formData.autoAnswer
+                    ? 'Ouvindo o áudio da reunião. As respostas sugeridas aparecerão aqui.'
+                    : 'Respostas automáticas desativadas. Você ainda pode fazer uma pergunta manual.'}
+                </div>
+              )}
+              {previousAnswers
+                .slice(0, Math.max(0, formData.answerCount - 1))
+                .map((previous, index) => (
+                  <div
+                    key={`${index}-${previous.question}`}
+                    className={`previous-answer previous-answer-${index + 1}`}
+                  >
+                    <div className="previous-answer-label">
+                      {index === 0 ? 'Anterior' : 'Antes dela'}
+                    </div>
+                    {previous.question && (
+                      <div className="answer-question" title={previous.question}>
+                        ❓ {previous.question}
+                      </div>
+                    )}
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{previous.answer}</ReactMarkdown>
+                    {formData.showLivePreview && previous.sources.length > 0 && (
+                      <div className="previous-answer-sources">
+                        {previous.sources.map((source) => source.split('/').pop()).join(' · ')}
+                      </div>
+                    )}
                   </div>
-                )}
-              </>
-            ) : (
-              <div
-                style={{
-                  height: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#64748b',
-                  fontSize: '0.9rem',
-                  textAlign: 'center',
-                  lineHeight: '1.6'
-                }}
-              >
-                {formData.autoAnswer ? 'Ouvindo o áudio da reunião. As respostas sugeridas aparecerão aqui.' : 'Respostas automáticas desativadas. Você ainda pode fazer uma pergunta manual.'}
-              </div>
-            )}
+                ))}
+            </div>
           </div>
         </div>
       </div>

@@ -1,9 +1,15 @@
 @import './base.css';
 
+/* Every size in the interface is in rem, so the base size scales the whole app with the window:
+ * about 12px in a narrow window, 14px at most in a wide one. */
+html {
+  font-size: clamp(12px, 0.35vw + 10.5px, 14px);
+}
+
 body {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: stretch;
   height: 100vh;
   margin: 0;
   overflow: hidden;
@@ -14,8 +20,8 @@ body {
 
 #root {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: stretch;
   width: 100%;
   height: 100%;
 }
@@ -32,18 +38,25 @@ body {
   min-height: 0;
 }
 
-/* The setup form can be taller than the transparent window. Keep its controls,
- * especially the start button, reachable instead of clipping the lower section. */
-.setup-shell {
-  overflow-y: auto !important;
-  justify-content: flex-start !important;
-  gap: 20px;
+/* Only the body of the setup screen scrolls. The drag bar above it must stay outside any
+ * scrolling element: Electron ignores drag regions inside scroll containers, which is what kept
+ * this window from being moved. */
+.setup-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: clamp(12px, 2.4vw, 22px) clamp(14px, 3vw, 28px) 0;
 }
 
-.setup-shell > :last-child {
+/* The start button stays reachable at the bottom however tall the form is. */
+.setup-body > :last-child {
   position: sticky;
   bottom: 0;
-  padding: 12px 0 2px;
+  margin-top: auto;
+  padding: 10px 0 12px;
   background: linear-gradient(to bottom, transparent, rgba(15, 15, 20, 0.98) 24%);
 }
 
@@ -88,12 +101,9 @@ body {
 }
 
 @media (max-width: 700px) {
-  .setup-shell {
-    height: 100% !important;
+  .setup-shell,
+  .hud-shell {
     border-radius: 0 !important;
-    overflow-y: auto !important;
-    justify-content: flex-start !important;
-    gap: 20px;
   }
 
   .setup-form-columns,
@@ -104,26 +114,6 @@ body {
 
   .session-drawer-header {
     align-items: flex-start !important;
-  }
-
-  .hud-shell {
-    height: 100% !important;
-    border-radius: 0 !important;
-  }
-
-  .hud-topbar {
-    height: auto !important;
-    min-height: 32px;
-    padding: 6px 12px !important;
-    align-items: flex-start !important;
-  }
-
-  .hud-window-controls {
-    gap: 4px !important;
-  }
-
-  .hud-window-controls > :first-child {
-    margin-right: 0 !important;
   }
 
   .hud-dashboard {
@@ -153,10 +143,11 @@ body {
 
 .hud-options {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
   align-items: center;
-  gap: 12px;
-  padding: 8px 24px 0;
+  gap: 10px;
+  padding: 6px clamp(8px, 1.8vw, 18px) 0;
   color: #cbd5e1;
   font-size: 0.75rem;
 }
@@ -170,8 +161,154 @@ body {
 }
 
 .setup-topbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
+  z-index: 120;
   flex-shrink: 0;
+}
+
+/* Short windows: the two-column form and the panels lose height before anything is clipped. */
+@media (max-height: 520px) {
+  .hud-panel {
+    min-height: 180px;
+  }
+}
+
+/* Headers never break text across lines. Buttons keep their width (the global min-width: 0
+ * above would otherwise let them shrink and wrap their label), titles end in an ellipsis,
+ * and the full wording of every short label is in its tooltip. */
+#root button,
+#root select,
+.hud-options label,
+.hud-topbar,
+.setup-topbar {
+  white-space: nowrap;
+}
+
+#root button,
+.hud-options label,
+.hud-window-controls {
+  flex-shrink: 0;
+}
+
+.bar-title,
+.hud-panel-header h3 {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.hud-panel-header > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.hud-panel-header > div:first-child > div {
+  min-width: 0;
+}
+
+/* Narrow windows: icons only, secondary details hidden. */
+@media (max-width: 760px) {
+  .btn-label {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .hide-narrow {
+    display: none !important;
+  }
+}
+
+/* Form controls do not inherit the page font by default. */
+#root button,
+#root input,
+#root select,
+#root textarea {
+  font-family: inherit;
+}
+
+/* Labels of the meeting options stay visible at every width; they are short on purpose. */
+.opt-label {
+  font-size: 0.72rem;
+}
+
+/* Answers panel: the question each answer refers to, and the earlier answers below the current one. */
+.answer-question {
+  margin-bottom: 6px;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.previous-answer {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+  font-size: 0.8rem;
+  opacity: 0.65;
+}
+
+.previous-answer-label {
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.previous-answer-sources {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 0.65rem;
+}
+
+
+.answer-count-select {
+  width: auto !important;
+  margin-left: 4px;
+  padding: 1px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.85);
+  color: #e2e8f0;
+  font-size: 0.72rem;
+}
+
+/* Thin dark scrollbars on every screen (they used to be styled only on the setup screen). */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Keep the answers close to the bottom edge: no trailing margin after the last paragraph and
+ * only a small padding below the panels. */
+.hud-dashboard {
+  padding-bottom: 6px !important;
+}
+
+.hud-panel {
+  padding-bottom: 6px !important;
+}
+
+.hud-shell .markdown-content p:last-child,
+.hud-shell .markdown-content ul:last-child,
+.hud-shell .markdown-content ol:last-child,
+.hud-shell .markdown-content li:last-child {
+  margin-bottom: 0;
 }

@@ -6,6 +6,7 @@ import {
   globalShortcut,
   dialog,
   desktopCapturer,
+  screen,
   session
 } from 'electron'
 import { join } from 'path'
@@ -172,7 +173,10 @@ async function generateMeetingAnswer(questionText) {
     source: activeSourceFilter,
     context: recentConversation
   })
-  sendToWindow('on-ai-answer-start', { status: 'Buscando no Harness e na base local…' })
+  sendToWindow('on-ai-answer-start', {
+    status: 'Buscando no Harness e na base local…',
+    question: questionText
+  })
   const config = harnessSearchConfig
   const remoteExcerpts =
     activeSourceFilter === 'all' ||
@@ -217,6 +221,7 @@ async function generateMeetingAnswer(questionText) {
       console.log(`[AI Answer] [${provider}] using ${excerpts.length} local excerpt(s): ${answer}`)
       if (mainWindow) {
         mainWindow.webContents.send('on-ai-answer', {
+          question: questionText,
           answer,
           provider,
           sources,
@@ -250,7 +255,12 @@ async function generateMeetingAnswer(questionText) {
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
-    height: 670,
+    // Short enough that the answers panel shows only the current answer (below 540 px);
+    // making the window taller reveals the previous one or two.
+    height: 520,
+    // Below this the forms stop fitting; the layout adapts to anything larger.
+    minWidth: 420,
+    minHeight: 360,
     show: false,
     autoHideMenuBar: true,
     transparent: true,
@@ -558,6 +568,21 @@ ipcMain.on('close-window', () => {
 
 let expandedWindowWidth = 900
 let transcriptWindowCollapsed = false
+
+// During a meeting the window can follow the length of the answers: the renderer reports the
+// height its content needs and the window grows or shrinks downwards, never past the screen.
+const AUTO_HEIGHT_MIN = 360
+ipcMain.on('fit-window-height', (_event, height) => {
+  if (!mainWindow || mainWindow.isDestroyed() || !currentMeetingData) return
+  if (mainWindow.isMaximized() || mainWindow.isFullScreen() || !Number.isFinite(height)) return
+  const bounds = mainWindow.getBounds()
+  const workArea = screen.getDisplayMatching(bounds).workArea
+  const available = workArea.y + workArea.height - bounds.y
+  const [, minimumHeight] = mainWindow.getMinimumSize()
+  const target = Math.round(Math.min(Math.max(height, minimumHeight, AUTO_HEIGHT_MIN), available))
+  if (Math.abs(target - bounds.height) < 4) return
+  mainWindow.setBounds({ ...bounds, height: target })
+})
 
 ipcMain.on('set-transcript-collapsed', (_event, collapsed) => {
   if (

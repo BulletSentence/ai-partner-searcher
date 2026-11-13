@@ -21,6 +21,7 @@ const api = {
   stopMeeting: () => ipcRenderer.send('stop-meeting'),
   askMeetingQuestion: (question) => ipcRenderer.send('ask-meeting-question', question),
   setAutoAnswer: (enabled) => ipcRenderer.send('set-auto-answer', enabled),
+  fitWindowHeight: (height) => ipcRenderer.send('fit-window-height', height),
   setTranscriptCollapsed: (collapsed) => ipcRenderer.send('set-transcript-collapsed', collapsed),
   retryLastMeetingQuestion: () => ipcRenderer.send('retry-last-meeting-question'),
   setKnowledgeSourceFilter: (source) => ipcRenderer.send('set-knowledge-source-filter', source),
