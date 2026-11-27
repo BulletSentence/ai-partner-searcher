@@ -556,6 +556,27 @@ body {
   flex-shrink: 0;
 }
 
+/* The title fills the free width of the top bar and is the only part that moves the window. The
+ * buttons sit outside the drag area, where macOS shows their pointer cursor. */
+.drag-handle {
+  flex: 1 1 auto;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: drag;
+}
+
+/* Everything clickable shows the pointer, also controls that were styled without it. */
+#root button:not(:disabled),
+#root select:not(:disabled),
+#root [role='switch'],
+#root input[type='checkbox'],
+#root input[type='range'],
+#root label:has(> input[type='checkbox']),
+#root .window-control-btn {
+  cursor: pointer;
+}
+
 /* Short windows: the two-column form and the panels lose height before anything is clipped. */
 @media (max-height: 520px) {
   .hud-panel {

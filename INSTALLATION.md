@@ -1,6 +1,6 @@
-# ⚙️ AI Assistant Installation Guide
+# DataWatch Installation Guide
 
-Follow these steps to set up **AI Assistant** on a fresh Linux/Ubuntu machine.
+Follow these steps to set up **DataWatch** on a fresh Linux/Ubuntu machine.
 
 ---
 

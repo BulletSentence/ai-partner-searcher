@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: AI Assistant
+appId: com.datawatch.app
+productName: DataWatch
 directories:
   buildResources: build
 files:
@@ -20,7 +20,7 @@ extraResources:
     filter:
       - '**/*'
 win:
-  executableName: ai-assistant
+  executableName: datawatch
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

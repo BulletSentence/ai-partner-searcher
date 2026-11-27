@@ -1,4 +1,6 @@
-# Copilot de Reuniões com IA
+# DataWatch
+
+Copiloto de reuniões local: transcreve a conversa em tempo real e sugere respostas com base nas suas notas e projetos.
 
 ## Recursos
 

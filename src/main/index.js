@@ -12,6 +12,8 @@ import {
 import { join, resolve } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+// The rounded app icon generated from resources/icon.png; shown in the Dock while developing.
+import dockIcon from '../../build/icon.png?asset'
 import { listAudioOutputs, startAudioCapture } from './audioCapture'
 import {
   CHANNEL_OTHERS,
@@ -44,7 +46,7 @@ import {
 import { isEchoOfOthers, isUsableTranscript } from './transcriptFilter'
 import { transcribeRecording } from './finalTranscription'
 import { readFile } from 'fs/promises'
-import { existsSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync } from 'fs'
 import { setTimeout as sleep } from 'timers/promises'
 import { exportFinalTranscript } from './harnessExport'
 import { loadHarnessSearchConfig, searchHarness } from './harnessSearch'
@@ -71,6 +73,24 @@ import {
 import defaultGrammar from '../../meeting-grammar.json'
 
 let mainWindow = null
+
+/**
+ * The app was called "ai-assistant" before DataWatch, and its data folder follows the name. Saved
+ * settings are copied once from the old folder. The API keys are not: they were encrypted under the
+ * old name and must be added again in Configurações.
+ */
+function migrateLegacySettings() {
+  const legacyFile = join(app.getPath('appData'), 'ai-assistant', 'meeting-settings.json')
+  const currentFile = join(app.getPath('userData'), 'meeting-settings.json')
+  if (!existsSync(legacyFile) || existsSync(currentFile)) return
+  try {
+    mkdirSync(app.getPath('userData'), { recursive: true })
+    copyFileSync(legacyFile, currentFile)
+    console.log('[Settings] Copied the settings saved before the rename to DataWatch.')
+  } catch (error) {
+    console.warn(`[Settings] Could not copy the previous settings: ${error.message}`)
+  }
+}
 
 // The glossary shipped with the app; once edited in the setup screen, the saved text replaces it.
 const DEFAULT_TERMINOLOGY = formatTerminology(defaultGrammar.terms || [])
@@ -314,7 +334,7 @@ function createWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -902,7 +922,9 @@ ipcMain.handle('save-meeting-settings', async (_event, settings) => {
 
 // App Lifecycle
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.datawatch.app')
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(dockIcon)
+  migrateLegacySettings()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

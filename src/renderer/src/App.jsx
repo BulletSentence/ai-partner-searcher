@@ -816,17 +816,16 @@ function App() {
             padding: '0 12px',
             background: 'rgba(30, 41, 59, 0.98)',
             borderBottom: '2px solid #22d3ee',
-            WebkitAppRegion: 'drag',
-            cursor: 'grab',
             userSelect: 'none'
           }}
-          title="Arraste para mover a janela"
         >
+          {/* Only the title drags the window: macOS ignores the cursor of buttons inside a drag area. */}
           <span
-            className="bar-title"
+            className="bar-title drag-handle"
+            title="Arraste para mover a janela"
             style={{ fontSize: '0.72rem', color: '#22d3ee', fontWeight: '600' }}
           >
-            Copilot de reuniões
+            DataWatch
           </span>
           <div
             style={{
@@ -1453,7 +1452,7 @@ function App() {
                 letterSpacing: '0.5px'
               }}
             >
-              Configuração do Copilot
+              Nova reunião
             </h2>
             <p style={{ margin: '0 0 1rem 0', fontSize: '0.82rem', color: '#64748b' }}>
               Descreva a conversa e escolha as fontes locais que poderão ajudar nas respostas.
@@ -1496,7 +1495,7 @@ function App() {
                   />
                   <span style={{ fontSize: '0.72rem', color: '#64748b', lineHeight: 1.4 }}>
                     Um termo por linha, como <code>Nome certo: variação 1, variação 2</code>. Os
-                    nomes próprios das notas do vault e dos projetos também são reconhecidos
+                    nomes próprios das notas da base de dados e dos projetos também são reconhecidos
                     automaticamente.
                   </span>
                 </div>
@@ -1640,7 +1639,7 @@ function App() {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                    Vault do Obsidian
+                    Base de dados (Obsidian, Markdown e documentos)
                   </label>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                     <button type="button" onClick={selectObsidianFolder} style={folderButtonStyle}>
@@ -1661,8 +1660,8 @@ function App() {
                   </div>
                   <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
                     {formData.obsidianVaultPath
-                      ? 'Vault selecionado:'
-                      : 'Nenhum vault selecionado (opcional).'}
+                      ? 'Pasta selecionada:'
+                      : 'Nenhuma pasta selecionada (opcional). Pode ser um vault do Obsidian ou qualquer pasta de notas.'}
                   </span>
                   {formData.obsidianVaultPath && (
                     <div className="source-path" title={formData.obsidianVaultPath}>
@@ -1852,7 +1851,7 @@ function App() {
                       className="session-card-details"
                       style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '2px' }}
                     >
-                      {session.data.meeting?.obsidianVaultPath || 'Sem vault configurado'}
+                      {session.data.meeting?.obsidianVaultPath || 'Sem base de dados configurada'}
                     </div>
                     <div
                       data-session-action
@@ -2034,7 +2033,6 @@ function App() {
           flex: '0 0 32px',
           background: 'rgba(30, 41, 59, 0.86)',
           borderBottom: '2px solid #22d3ee',
-          WebkitAppRegion: 'drag',
           userSelect: 'none',
           boxSizing: 'border-box',
           boxShadow: '0 4px 20px rgba(34, 211, 238, 0.15)',
@@ -2042,11 +2040,11 @@ function App() {
         }}
       >
         <span
-          className="hud-topbar-title bar-title"
+          className="hud-topbar-title bar-title drag-handle"
           style={{ fontSize: '0.75rem', color: '#22d3ee', fontWeight: '600' }}
-          title="Copilot de reuniões com IA — arraste para mover"
+          title="DataWatch — arraste para mover"
         >
-          Copilot de reuniões
+          DataWatch
         </span>
         <div
           className="hud-window-controls"
