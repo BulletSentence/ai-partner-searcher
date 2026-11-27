@@ -121,7 +121,11 @@ As reuniões gravadas aparecem em cartões no fim da tela inicial, quebrando lin
 
 ## O que fica salvo de cada reunião
 
-Cada reunião gera uma pasta `meetings/<data>_<hora>_<contexto>/`:
+Cada reunião gera uma pasta `<data>_<hora>_<contexto>/` dentro da pasta de reuniões:
+
+- rodando com `npm run dev`: `meetings/`, na pasta do projeto;
+- no app instalado: `~/Documents/DataWatch/meetings` (os logs ficam em `~/Library/Logs/DataWatch` no macOS);
+- em qualquer caso, `MEETINGS_DIR` no `.env` escolhe outra pasta.
 
 | Arquivo                | Conteúdo                                                                                          |
 | ---------------------- | ------------------------------------------------------------------------------------------------- |

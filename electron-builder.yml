@@ -2,12 +2,13 @@ appId: com.datawatch.app
 productName: DataWatch
 directories:
   buildResources: build
+# Only what the installed app runs: the compiled code and its icons. The project folder also holds
+# recorded meetings, logs, the Whisper sources (.cache) and multi-GB models, which must never ship
+# inside the app. Production dependencies from node_modules are added by electron-builder.
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
-  - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - out/**
+  - resources/**
+  - package.json
 asarUnpack:
   - resources/**
 extraResources:
@@ -15,10 +16,14 @@ extraResources:
     to: bin
     filter:
       - whisper-stream*
+  # The live model and the voice detector. large-v3 (3 GB) is left out: without it the final
+  # transcript uses the same model as the meeting.
   - from: models
     to: models
     filter:
       - '**/*'
+      - '!ggml-large-v3.bin'
+      - '!.gitkeep'
 win:
   executableName: datawatch
 nsis:
