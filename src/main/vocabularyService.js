@@ -1,3 +1,5 @@
+import { createYielder } from './cooperative.js'
+
 // Proper names learned from the indexed notes, used to steer Whisper and to repair names it mishears.
 // Everything here runs once per indexing or in microseconds per utterance: lookups are by key, and the
 // fuzzy comparison only visits terms that share the first sound of the heard word.
@@ -113,11 +115,16 @@ function rebuildLookup() {
  * Learns the proper names of the knowledge base from the indexed chunks. Only notes count:
  * code is full of identifiers that are not spoken the way they are written.
  */
-export function buildVocabulary(chunks = []) {
+export async function buildVocabulary(chunks = [], { onProgress, signal } = {}) {
   const started = Date.now()
+  const maybeYield = createYielder(signal)
   const stats = new Map()
   const forms = new Map() // folded word -> Map(surface form -> count)
-  for (const chunk of chunks) {
+  for (const [index, chunk] of chunks.entries()) {
+    if (index % 200 === 0) {
+      onProgress?.(index, chunks.length)
+      await maybeYield()
+    }
     if (!PROSE_FILE.test(chunk.path || '')) continue
     const content = stripCode(chunk.content)
     for (const match of content.matchAll(/\p{L}+/gu)) {
@@ -156,6 +163,7 @@ export function buildVocabulary(chunks = []) {
     terms.push({ term, key, sound: phoneticKey(term), count: proper })
   }
   terms.sort((first, second) => second.count - first.count)
+  onProgress?.(chunks.length, chunks.length)
   learnedTerms = terms.slice(0, MAX_LEARNED_TERMS)
   wordStats = stats
   rebuildLookup()

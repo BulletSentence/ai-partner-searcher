@@ -745,16 +745,48 @@ ipcMain.on('start-meeting', async (_event, data) => {
 
 // The renderer explicitly prepares local sources before capture begins, so startup
 // can report an actionable status without delaying audio capture unexpectedly.
+// Preparing the sources runs in short slices (see cooperative.js) so the window stays usable;
+// its progress goes to the loading screen and the user can cancel it.
+let knowledgeJob = null
+
 ipcMain.handle('prepare-knowledge-sources', async (_event, data) => {
   activeSourceFilter = 'all'
-  const status = await indexKnowledgeSources(data)
-  // Names in the notes become vocabulary for the transcription; this runs once, before the meeting.
-  const vocabulary = buildVocabulary(getIndexedChunks())
-  console.log(
-    `[Vocabulary] Learned ${vocabulary.terms} name(s) from the notes in ${vocabulary.ms} ms.`
-  )
-  return { ...status, vocabularyTerms: vocabulary.terms }
+  knowledgeJob?.abort()
+  const controller = new AbortController()
+  knowledgeJob = controller
+  let lastSent = 0
+  const report = (progress, force = false) => {
+    const now = Date.now()
+    if (!force && now - lastSent < 100) return
+    lastSent = now
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('knowledge-progress', progress)
+    }
+  }
+  try {
+    const status = await indexKnowledgeSources(data, {
+      signal: controller.signal,
+      onProgress: (progress) => report(progress)
+    })
+    // Names in the notes become vocabulary for the transcription; this runs once, before the meeting.
+    report({ phase: 'vocabulary', done: 0, total: 1 }, true)
+    const vocabulary = await buildVocabulary(getIndexedChunks(), {
+      signal: controller.signal,
+      onProgress: (done, total) => report({ phase: 'vocabulary', done, total })
+    })
+    console.log(
+      `[Vocabulary] Learned ${vocabulary.terms} name(s) from the notes in ${vocabulary.ms} ms.`
+    )
+    return { ...status, vocabularyTerms: vocabulary.terms }
+  } catch (error) {
+    if (error.name === 'AbortError') return { cancelled: true }
+    throw error
+  } finally {
+    if (knowledgeJob === controller) knowledgeJob = null
+  }
 })
+
+ipcMain.on('cancel-knowledge-sources', () => knowledgeJob?.abort())
 
 ipcMain.handle('get-audio-outputs', () => listAudioOutputs())
 ipcMain.handle('get-transcription-models', () => listTranscriptionModels())
