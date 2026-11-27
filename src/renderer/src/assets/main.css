@@ -481,6 +481,93 @@ body {
   accent-color: #22d3ee;
 }
 
+/* Loading screen shown while the sources are prepared for a meeting. */
+.modal-card.prep-card {
+  border-color: rgba(34, 211, 238, 0.3);
+}
+
+.modal-card.prep-card h3 {
+  color: #e2e8f0;
+}
+
+.prep-steps {
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.prep-steps li::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  vertical-align: 1px;
+}
+
+.prep-steps li.is-active {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.prep-steps li.is-active::before {
+  background: #22d3ee;
+  border-color: #22d3ee;
+}
+
+.prep-steps li.is-done {
+  color: #86efac;
+}
+
+.prep-steps li.is-done::before {
+  background: #86efac;
+  border-color: #86efac;
+}
+
+.prep-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.prep-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: #22d3ee;
+  transition: width 0.15s linear;
+}
+
+.prep-bar.is-indeterminate span {
+  width: 35%;
+  animation: prep-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes prep-slide {
+  from {
+    left: -35%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+.modal-card .prep-detail {
+  margin: 8px 0 14px;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+
 .session-actions {
   display: flex;
   flex-wrap: wrap;

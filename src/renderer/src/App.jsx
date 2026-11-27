@@ -432,10 +432,15 @@ function App() {
   const handleStart = async () => {
     if (!formData.transcriberModel || !transcriberStatus.ready) return
     setIsPreparingSources(true)
+    setPrepProgress({ phase: 'starting' })
     setSavedMeetingFolder('')
     try {
       if (window.api.isMac) await startNativeAudioCapture()
       const status = await window.api.prepareKnowledgeSources(formData)
+      if (status?.cancelled) {
+        if (window.api.isMac) await stopNativeAudioCapture().catch(() => {})
+        return
+      }
       setIndexStatus(status)
       setSourceFilter('all')
       const meetingData = { ...formData, showLivePreview: false, transcriptCollapsed: true }
@@ -445,6 +450,7 @@ function App() {
       setIsSetupComplete(true)
     } catch (error) {
       console.error('Error preparing local knowledge sources:', error)
+      if (window.api.isMac) stopNativeAudioCapture().catch(() => {})
       setIndexStatus({
         files: 0,
         chunks: 0,
@@ -452,6 +458,7 @@ function App() {
       })
     } finally {
       setIsPreparingSources(false)
+      setPrepProgress(null)
     }
   }
 
@@ -562,6 +569,16 @@ function App() {
       setExportStatus((current) => ({ ...current, [folder]: { busy: false } }))
     }
   }
+
+  // Progress of the source preparation, shown on the loading screen while a meeting starts.
+  const [prepProgress, setPrepProgress] = useState(null)
+  useEffect(
+    () =>
+      window.api.onKnowledgeProgress?.((progress) => {
+        if (progress && typeof progress === 'object') setPrepProgress(progress)
+      }),
+    []
+  )
 
   // The theme and the background opacity apply to the whole window, setup and meeting alike.
   useEffect(() => {
@@ -927,6 +944,87 @@ function App() {
             </button>
           </div>
         </div>
+
+        {isPreparingSources && (
+          <div className="modal-backdrop">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="prep-title"
+              aria-describedby="prep-detail"
+              className="modal-card prep-card"
+            >
+              <h3 id="prep-title">Preparando a reunião</h3>
+              {(() => {
+                const progress = prepProgress || { phase: 'starting' }
+                const steps = [
+                  ['reading', 'Lendo os arquivos'],
+                  ['indexing', 'Montando o índice de busca'],
+                  ['vocabulary', 'Aprendendo os nomes próprios']
+                ]
+                const current = steps.findIndex(([phase]) => phase === progress.phase)
+                const percent =
+                  progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : null
+                const detail =
+                  progress.phase === 'reading'
+                    ? `${(progress.files || 0).toLocaleString('pt-BR')} arquivo(s) lido(s)${
+                        progress.location ? ` em ${progress.location.split('/').pop()}` : ''
+                      }`
+                    : percent !== null
+                      ? `${percent}%`
+                      : 'Conectando ao áudio…'
+                return (
+                  <>
+                    <ol className="prep-steps">
+                      {steps.map(([phase, label], index) => (
+                        <li
+                          key={phase}
+                          className={
+                            index < current ? 'is-done' : index === current ? 'is-active' : ''
+                          }
+                        >
+                          {label}
+                        </li>
+                      ))}
+                    </ol>
+                    <div
+                      className={`prep-bar${percent === null ? ' is-indeterminate' : ''}`}
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={percent ?? undefined}
+                    >
+                      <span style={percent === null ? undefined : { width: `${percent}%` }} />
+                    </div>
+                    <p id="prep-detail" className="prep-detail">
+                      {detail}
+                    </p>
+                  </>
+                )
+              })()}
+              <p>
+                A janela continua respondendo: dá para minimizar e voltar quando terminar. A
+                gravação começa assim que a preparação acabar.
+              </p>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="modal-button"
+                  onClick={() => window.api.minimize()}
+                >
+                  Minimizar
+                </button>
+                <button
+                  type="button"
+                  className="modal-button modal-button-danger"
+                  onClick={() => window.api.cancelKnowledgeSources()}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {isSettingsOpen && (
           <div className="modal-backdrop" onClick={() => setIsSettingsOpen(false)}>

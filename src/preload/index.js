@@ -51,6 +51,12 @@ const api = {
   getTranscriberStatus: () => ipcRenderer.invoke('get-transcriber-status'),
   selectFolders: (multiple = false) => ipcRenderer.invoke('select-folders', { multiple }),
   prepareKnowledgeSources: (data) => ipcRenderer.invoke('prepare-knowledge-sources', data),
+  cancelKnowledgeSources: () => ipcRenderer.send('cancel-knowledge-sources'),
+  onKnowledgeProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress)
+    ipcRenderer.on('knowledge-progress', listener)
+    return () => ipcRenderer.removeListener('knowledge-progress', listener)
+  },
   getSavedMeetings: () => ipcRenderer.invoke('get-saved-meetings'),
   toggleAudioSource: (source) => ipcRenderer.send('toggle-audio-source', source),
   onAudioLevel: (cb) => ipcRenderer.on('audio-level', (_e, val) => cb(val)),

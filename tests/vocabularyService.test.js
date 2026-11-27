@@ -30,6 +30,14 @@ function learn() {
   return buildVocabulary(notes)
 }
 
+test('learning can be cancelled and leaves the previous vocabulary in place', async () => {
+  await learn()
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(buildVocabulary(notes, { signal: controller.signal }), /cancelada/)
+  assert.ok(getLearnedTerms().some(({ term }) => term === 'Paketá'))
+})
+
 test('sounds that Whisper spells differently share one phonetic key', () => {
   assert.equal(phoneticKey('Paketá'), phoneticKey('Paquetá'))
   assert.equal(phoneticKey('Kanastra'), phoneticKey('Canastra'))
@@ -37,8 +45,8 @@ test('sounds that Whisper spells differently share one phonetic key', () => {
   assert.notEqual(phoneticKey('Paketá'), phoneticKey('pacote'))
 })
 
-test('learns proper names from notes, not headings, acronyms or code', () => {
-  learn()
+test('learns proper names from notes, not headings, acronyms or code', async () => {
+  await learn()
   const terms = getLearnedTerms().map(({ term }) => term)
   assert.ok(terms.includes('Paketá'))
   assert.ok(terms.includes('Dataprev'))
@@ -48,8 +56,8 @@ test('learns proper names from notes, not headings, acronyms or code', () => {
   }
 })
 
-test('repairs misheard names and leaves ordinary words alone', () => {
-  learn()
+test('repairs misheard names and leaves ordinary words alone', async () => {
+  await learn()
   assert.equal(
     correctWithVocabulary('Falei com a Paquetá sobre o pacote'),
     'Falei com a Paketá sobre o pacote'
@@ -59,15 +67,15 @@ test('repairs misheard names and leaves ordinary words alone', () => {
   assert.equal(correctWithVocabulary('Resumo do contrato'), 'Resumo do contrato')
 })
 
-test('terms typed in the glossary win and are matched by sound too', () => {
-  learn()
+test('terms typed in the glossary win and are matched by sound too', async () => {
+  await learn()
   configureTerminology(parseTerminologyText('Rubicon: rubicom dois\n# comentário\nCredifit'))
   assert.equal(correctTerminology('o rubicom e a credifiti'), 'o Rubicon e a Credifit')
   configureTerminology([])
 })
 
-test('prompt terms prefer names from notes related to the meeting', () => {
-  learn()
+test('prompt terms prefer names from notes related to the meeting', async () => {
+  await learn()
   const terms = selectPromptTerms({ relatedText: 'Kanastra Kanastra', exclude: ['Dataprev'] })
   assert.equal(terms[0], 'Kanastra')
   assert.ok(terms.includes('Paketá'))
