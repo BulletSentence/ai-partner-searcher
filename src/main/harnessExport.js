@@ -17,6 +17,20 @@ async function recordExport(folder, summary, path) {
   }
 }
 
+/**
+ * "2026-11-27 09h30": when the meeting was recorded, in local time. It goes first in the file name so
+ * two meetings with the same context ("Daily") never share a name and the notes sort by date.
+ * Colons are avoided because macOS and Windows do not accept them in file names.
+ */
+export function meetingDateLabel(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (number) => String(number).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+    date.getHours()
+  )}h${pad(date.getMinutes())}`
+}
+
 export async function exportFinalTranscript({ meetingsDirectory, folder, destination }) {
   const child = relative(resolve(meetingsDirectory), resolve(folder || '.'))
   if (!child || child.startsWith('..') || isAbsolute(child)) throw new Error('Reunião inválida.')
@@ -34,12 +48,15 @@ export async function exportFinalTranscript({ meetingsDirectory, folder, destina
     }
   }
   if (!(await stat(target)).isDirectory()) throw new Error('O destino precisa ser uma pasta.')
-  const name =
+  const context =
     String(summary.meeting?.context || basename(folder))
       .replace(/[<>:"/\\|?*\p{Cc}]/gu, '-')
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 140) || 'Reunião'
+  // The recording time, not the export time: sending the same meeting again keeps its date.
+  const recordedAt = meetingDateLabel(summary.timestamp) || meetingDateLabel(Date.now())
+  const name = `${recordedAt} - ${context}`
   const suffix = ' - transcricao final'
   for (let index = 0; index < 1000; index += 1) {
     const path = join(target, `${name}${suffix}${index ? ` (${index + 1})` : ''}.md`)
