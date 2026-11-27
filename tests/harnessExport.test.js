@@ -13,7 +13,10 @@ test('exports only the final Markdown into HARNESS and preserves duplicate names
     const destination = join(root, 'vault')
     await mkdir(folder, { recursive: true })
     await mkdir(join(destination, 'HARNESS'), { recursive: true })
-    await writeFile(join(folder, 'reuniao.json'), JSON.stringify({ meeting: { context: 'Daily / equipe' }, finalTranscript: [] }))
+    await writeFile(
+      join(folder, 'reuniao.json'),
+      JSON.stringify({ meeting: { context: 'Daily / equipe' }, finalTranscript: [] })
+    )
     await writeFile(join(folder, 'transcricao-final.md'), '# Daily\nTranscrição final')
     const args = { meetingsDirectory, folder, destination }
     const first = await exportFinalTranscript(args)
@@ -21,8 +24,17 @@ test('exports only the final Markdown into HARNESS and preserves duplicate names
     assert.equal(first, join(destination, 'HARNESS', 'Daily - equipe - transcricao final.md'))
     assert.notEqual(first, second)
     assert.equal(await readFile(first, 'utf8'), '# Daily\nTranscrição final')
+    const recorded = JSON.parse(await readFile(join(folder, 'reuniao.json'), 'utf8'))
+    assert.deepEqual(
+      recorded.harnessExports.map((entry) => entry.path),
+      [first, second]
+    )
+    assert.equal(recorded.meeting.context, 'Daily / equipe')
     assert.equal((await readdir(join(destination, 'HARNESS'))).length, 2)
-    const direct = await exportFinalTranscript({ ...args, destination: join(destination, 'HARNESS') })
+    const direct = await exportFinalTranscript({
+      ...args,
+      destination: join(destination, 'HARNESS')
+    })
     assert.equal(direct, join(destination, 'HARNESS', 'Daily - equipe - transcricao final (3).md'))
     await exportFinalTranscript({ ...args, destination: root })
     await assert.rejects(exportFinalTranscript({ ...args, folder: root }), /inválida/)

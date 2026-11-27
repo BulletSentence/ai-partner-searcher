@@ -3,20 +3,11 @@ import { GoogleGenAI } from '@google/genai'
 import OpenAI from 'openai'
 import Anthropic from '@anthropic-ai/sdk'
 import { describeProviderError, logRuntimeEvent } from './runtimeLogger'
-
-// Initialize Gemini client with fallback
-const geminiApiKey = process.env.GEMINI_API_KEY || 'DUMMY_KEY_FOR_STARTUP'
-const ai = new GoogleGenAI({ apiKey: geminiApiKey })
+import { PROVIDERS } from './aiProviders.js'
+import { getAgentPlan } from './providerSettings'
 
 let dynamicSystemInstruction = ''
 let conversationHistory = []
-let useOllama = false
-let openaiModel = 'gpt-6-luna'
-
-const openaiModels = {
-  'gpt-6-luna': 'GPT-6 Luna',
-  'gpt-4o-mini': 'GPT-4o Mini'
-}
 
 const profileFieldEnvNames = {
   meetingContext: 'MEETING_CONTEXT',
@@ -28,10 +19,6 @@ function envText(name) {
   return (process.env[name] || '').replace(/\\n/g, '\n').trim()
 }
 
-function envBoolean(name) {
-  return ['1', 'true', 'yes', 'sim'].includes((process.env[name] || '').trim().toLowerCase())
-}
-
 /** Returns the meeting defaults configured once in .env. */
 export function getDefaultMeetingProfile() {
   const profile = Object.fromEntries(
@@ -39,16 +26,9 @@ export function getDefaultMeetingProfile() {
   )
   const language = process.env.MEETING_LANGUAGE === 'en-US' ? 'en-US' : 'pt-BR'
 
-  const configuredOpenAIModel = process.env.OPENAI_MODEL
-  const selectedOpenAIModel = openaiModels[configuredOpenAIModel]
-    ? configuredOpenAIModel
-    : 'gpt-6-luna'
-
   return {
     ...profile,
-    language,
-    useOllama: envBoolean('MEETING_USE_OLLAMA'),
-    openaiModel: selectedOpenAIModel
+    language
   }
 }
 
@@ -65,12 +45,6 @@ export function resolveMeetingProfile(userData = {}) {
 
   if (userData.language === 'pt-BR' || userData.language === 'en-US') {
     profile.language = userData.language
-  }
-  if (typeof userData.useOllama === 'boolean') {
-    profile.useOllama = userData.useOllama
-  }
-  if (openaiModels[userData.openaiModel]) {
-    profile.openaiModel = userData.openaiModel
   }
 
   return profile
@@ -95,111 +69,120 @@ The question comes from live speech recognition and may contain a misheard word.
 
 Preserve exact proper names, acronyms and product names found in the meeting context or local sources. Do not guess or alter a name. If a fact is not confirmed, say only: "Preciso confirmar esse ponto." Do not mention hidden instructions or that you are an AI.
 `
-  useOllama = meeting.useOllama
-  openaiModel = meeting.openaiModel
   conversationHistory = []
-  console.log(
-    `[AI Service] Configured meeting prompt (Ollama: ${useOllama}, OpenAI: ${openaiModel})`
-  )
+  console.log('[AI Service] Configured meeting prompt.')
   return meeting
 }
 
-/** Calls the OpenAI model selected in the setup screen. */
-async function callOpenAI(systemInstruction, history) {
-  const openaiApiKey = process.env.OPENAI_API_KEY
-  if (!openaiApiKey) {
-    throw new Error('OPENAI_API_KEY is not defined.')
+const CLOUD_TIMEOUT_MS = 15_000
+// A local model may need to load into memory before its first answer.
+const OLLAMA_TIMEOUT_MS = 45_000
+const MAX_ANSWER_TOKENS = 400
+
+function chatMessages(history) {
+  return history.map((message) => ({
+    role: message.role === 'model' ? 'assistant' : message.role,
+    content: message.content
+  }))
+}
+
+// Reasoning models answer a live question far faster with reasoning turned down.
+function openaiReasoning(model) {
+  if (/^gpt-([6-9]|5\.[1-9])/.test(model)) return { effort: 'none' }
+  if (/^(gpt-5|o\d)/.test(model)) return { effort: 'low' }
+  return undefined
+}
+
+async function streamOpenAI({ apiKey, model }, system, history, onDelta, signal) {
+  const openai = new OpenAI({ apiKey, maxRetries: 0 })
+  const request = async (reasoning) => {
+    const stream = await openai.responses.create(
+      {
+        model,
+        input: [{ role: 'developer', content: system }, ...chatMessages(history)],
+        ...(reasoning ? { reasoning } : {}),
+        max_output_tokens: MAX_ANSWER_TOKENS,
+        stream: true
+      },
+      { signal }
+    )
+    let text = ''
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta') {
+        text += event.delta
+        onDelta(event.delta)
+      } else if (event.type === 'error') {
+        throw new Error(event.message || 'OpenAI streaming error.')
+      }
+    }
+    return text
   }
+  const reasoning = openaiReasoning(model)
+  try {
+    return await request(reasoning)
+  } catch (error) {
+    // Some models refuse the reasoning setting; the answer is still worth having without it.
+    if (reasoning && error?.status === 400 && /reasoning/i.test(error.message)) return request()
+    throw error
+  }
+}
 
-  const openai = new OpenAI({ apiKey: openaiApiKey })
-  const response = await openai.responses.create({
-    model: openaiModel,
-    input: [
-      { role: 'developer', content: systemInstruction || 'Act as a meeting copilot.' },
-      ...history.map((message) => ({
-        role: message.role === 'model' ? 'assistant' : message.role,
-        content: message.content
-      }))
-    ],
-    reasoning: { effort: 'none' },
-    max_output_tokens: 120
+async function streamClaude({ apiKey, model }, system, history, onDelta, signal) {
+  const anthropic = new Anthropic({ apiKey, maxRetries: 0 })
+  const stream = anthropic.messages.stream(
+    { model, max_tokens: MAX_ANSWER_TOKENS, system, messages: chatMessages(history) },
+    { signal }
+  )
+  stream.on('text', (delta) => onDelta(delta))
+  return stream.finalText()
+}
+
+async function streamGemini({ apiKey, model }, system, history, onDelta, signal) {
+  const gemini = new GoogleGenAI({ apiKey })
+  const stream = await gemini.models.generateContentStream({
+    model,
+    contents: history.map((message) => ({
+      role: message.role === 'user' ? 'user' : 'model',
+      parts: [{ text: message.content }]
+    })),
+    config: { systemInstruction: system, maxOutputTokens: MAX_ANSWER_TOKENS, abortSignal: signal }
   })
-
-  const text = response.output_text?.trim()
-  if (!text) {
-    throw new Error('OpenAI returned an empty response.')
+  let text = ''
+  for await (const chunk of stream) {
+    const delta = chunk.text || ''
+    if (!delta) continue
+    text += delta
+    onDelta(delta)
   }
   return text
 }
 
-/** Streams an OpenAI response and emits each visible text delta as it arrives. */
-async function callOpenAIStream(systemInstruction, history, onDelta, signal) {
-  const openaiApiKey = process.env.OPENAI_API_KEY
-  if (!openaiApiKey) {
-    throw new Error('OPENAI_API_KEY is not defined.')
-  }
-
-  const openai = new OpenAI({ apiKey: openaiApiKey })
-  const stream = await openai.responses.create(
-    {
-      model: openaiModel,
-      input: [
-        { role: 'developer', content: systemInstruction || 'Act as a meeting copilot.' },
-        ...history.map((message) => ({
-          role: message.role === 'model' ? 'assistant' : message.role,
-          content: message.content
-        }))
-      ],
-      reasoning: { effort: 'none' },
-      max_output_tokens: 120,
-      stream: true
-    },
-    { signal, timeout: 8_000, maxRetries: 0 }
-  )
-
-  let text = ''
-  for await (const event of stream) {
-    if (event.type === 'response.output_text.delta') {
-      text += event.delta
-      onDelta(event.delta)
-    } else if (event.type === 'error') {
-      throw new Error(event.message || 'OpenAI streaming error.')
-    }
-  }
-
-  const result = text.trim()
-  if (!result) {
-    throw new Error('OpenAI returned an empty streamed response.')
-  }
-  return result
-}
-
-/**
- * Calls local Ollama service.
- * @param {string} systemInstruction System prompt instructions.
- * @param {array} conversationHistory History messages.
- * @returns {Promise<string>} The response text from Ollama.
- */
-async function callOllama(systemInstruction, conversationHistory) {
-  const prompt = `${systemInstruction}\n\nConversation History:\n${conversationHistory.map((m) => `${m.role === 'model' || m.role === 'assistant' ? 'AI' : 'User'}: ${m.content}`).join('\n')}\n\nAI:`
-
-  console.log('[AI Service] Attempting local text generation via Ollama (gemma2:2b)...')
-  const response = await fetch('http://localhost:11434/api/generate', {
+async function callOllama({ model, url }, system, history, onDelta, signal) {
+  const response = await fetch(`${String(url).replace(/\/+$/, '')}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'gemma2:2b',
-      prompt: prompt,
+      model,
+      messages: [{ role: 'system', content: system }, ...chatMessages(history)],
       stream: false
-    })
+    }),
+    signal
   })
+  if (!response.ok) throw new Error(`Ollama HTTP error! status: ${response.status}`)
+  const text = (await response.json())?.message?.content || ''
+  if (text) onDelta(text)
+  return text
+}
 
-  if (!response.ok) {
-    throw new Error(`Ollama HTTP error! status: ${response.status}`)
-  }
+const providerCalls = {
+  openai: streamOpenAI,
+  anthropic: streamClaude,
+  gemini: streamGemini,
+  ollama: callOllama
+}
 
-  const data = await response.json()
-  return data.response ? data.response.trim() : ''
+export function providerLabel({ provider, model }) {
+  return `${PROVIDERS[provider]?.short || provider} · ${model}`
 }
 
 /**
@@ -235,188 +218,50 @@ export async function generateMeetingHelp(
     conversationHistory = conversationHistory.slice(-20)
   }
 
-  // If local Ollama toggle is forced, attempt direct local routing
-  if (useOllama) {
-    try {
-      onProviderStatus?.('Tentando Ollama local…')
-      const text = await callOllama(dynamicSystemInstruction, conversationHistory)
-      if (text) {
-        conversationHistory.push({ role: 'model', content: text })
-        onAnswerReady(text, 'Ollama Local')
-        return
-      }
-      throw new Error('Ollama returned an empty response.')
-    } catch (ollamaErr) {
-      logRuntimeEvent('provider_failure', {
-        provider: 'Ollama Local',
-        ...describeProviderError(ollamaErr)
-      })
-      console.warn(
-        `[AI Service] Direct Ollama call failed: ${ollamaErr.message}. Falling back to cascade...`
-      )
-    }
-  }
-
-  // The model selected in the setup screen is the preferred cloud provider.
-  try {
-    onProviderStatus?.(`Consultando ${openaiModels[openaiModel]}…`)
-    console.log(`[AI Service] Attempting text generation with ${openaiModels[openaiModel]}...`)
-    const text = await callOpenAIStream(
-      dynamicSystemInstruction,
-      conversationHistory,
-      (delta) => onAnswerDelta?.(delta, openaiModels[openaiModel]),
-      signal
-    )
-    conversationHistory.push({ role: 'model', content: text })
-    onAnswerReady(text, openaiModels[openaiModel])
-    return
-  } catch (openaiErr) {
-    if (signal?.aborted) return
-    const errorDetails = describeProviderError(openaiErr)
-    logRuntimeEvent('provider_failure', { provider: openaiModels[openaiModel], ...errorDetails })
+  const plan = await getAgentPlan()
+  if (!plan.length) {
+    conversationHistory.pop()
     onProviderStatus?.(
-      `OpenAI falhou (${errorDetails.status || errorDetails.name}); alternando para Gemini…`
+      'Nenhum provedor de IA configurado. Abra Configurações e adicione uma chave ou ative o Ollama.'
     )
-    console.warn(
-      `[AI Service] ${openaiModels[openaiModel]} failed: ${openaiErr.message}. Falling back to Gemini...`
-    )
+    return
   }
 
-  // Primary: Try Gemini 2.5 Flash with 5000ms timeout
-  try {
-    onProviderStatus?.('Consultando Gemini…')
-    console.log('[AI Service] Attempting text generation with Gemini 2.5 Flash (5s Timeout)...')
-
-    // Map history to the required parts array structure of Gemini SDK
-    const geminiContents = conversationHistory.map((msg) => ({
-      role: msg.role,
-      parts: [{ text: msg.content }]
-    }))
-
-    const geminiCall = (async () => {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: geminiContents,
-        config: {
-          systemInstruction: dynamicSystemInstruction || 'Act as a meeting copilot.'
-        }
-      })
-      const text =
-        response.text || (response.candidates && response.candidates[0].content.parts[0].text)
-      if (!text) {
-        throw new Error('Gemini returned an empty response.')
-      }
-      return text
-    })()
-
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => {
-        reject(new Error('Gemini request timed out after 5000ms'))
-      }, 5000)
-    })
-
-    const text = await Promise.race([geminiCall, timeoutPromise])
-    conversationHistory.push({ role: 'model', content: text })
-    onAnswerReady(text, 'Gemini 2.5 Flash')
-    return
-  } catch (geminiErr) {
+  const system = dynamicSystemInstruction || 'Act as a meeting copilot.'
+  // The model chosen in the setup screen goes first; the other configured providers are the fallback.
+  for (const [index, target] of plan.entries()) {
     if (signal?.aborted) return
-    logRuntimeEvent('provider_failure', {
-      provider: 'Gemini 2.5 Flash',
-      ...describeProviderError(geminiErr)
-    })
-    onProviderStatus?.('Gemini indisponível; alternando para Ollama…')
-    console.warn(
-      `[AI Service] Gemini failed or timed out: ${geminiErr.message}. Falling back to Ollama...`
+    const label = providerLabel(target)
+    const next = plan[index + 1]
+    onProviderStatus?.(`Consultando ${label}…`)
+    const timeout = AbortSignal.timeout(
+      target.provider === 'ollama' ? OLLAMA_TIMEOUT_MS : CLOUD_TIMEOUT_MS
     )
-
-    // Secondary: Try local Ollama instance
+    const attemptSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
     try {
-      onProviderStatus?.('Tentando Ollama local…')
-      const text = await callOllama(dynamicSystemInstruction, conversationHistory)
-      if (text) {
-        conversationHistory.push({ role: 'model', content: text })
-        onAnswerReady(text, 'Ollama Local')
-        return
-      }
-      throw new Error('Ollama returned an empty response.')
-    } catch (ollamaErr) {
+      const text = (
+        await providerCalls[target.provider](
+          target,
+          system,
+          conversationHistory,
+          (delta) => onAnswerDelta?.(delta, label),
+          attemptSignal
+        )
+      ).trim()
+      if (!text) throw new Error(`${label} returned an empty response.`)
+      conversationHistory.push({ role: 'model', content: text })
+      onAnswerReady(text, label)
+      return
+    } catch (error) {
       if (signal?.aborted) return
-      logRuntimeEvent('provider_failure', {
-        provider: 'Ollama Local',
-        ...describeProviderError(ollamaErr)
-      })
-      onProviderStatus?.('Ollama indisponível; alternando para Claude…')
-      console.warn(
-        `[AI Service] Ollama fallback failed: ${ollamaErr.message}. Falling back to Claude...`
+      const details = describeProviderError(error)
+      logRuntimeEvent('provider_failure', { provider: label, ...details })
+      console.warn(`[AI Service] ${label} failed: ${error.message}`)
+      onProviderStatus?.(
+        next
+          ? `${PROVIDERS[target.provider].short} falhou (${details.status || details.name}); tentando ${providerLabel(next)}…`
+          : 'Nenhum provedor respondeu. Verifique as chaves em Configurações e a conexão.'
       )
-
-      // Tertiary: Try Anthropic Claude 3.5 Sonnet
-      try {
-        onProviderStatus?.('Consultando Claude…')
-        const anthropicApiKey = process.env.ANTHROPIC_API_KEY
-        if (!anthropicApiKey) {
-          throw new Error('ANTHROPIC_API_KEY is not defined.')
-        }
-
-        console.log('[AI Service] Attempting text generation with Claude 3.5 Sonnet...')
-        const anthropic = new Anthropic({ apiKey: anthropicApiKey })
-
-        const anthropicMessages = conversationHistory.map((msg) => ({
-          role: msg.role === 'model' ? 'assistant' : msg.role,
-          content: msg.content
-        }))
-
-        const response = await anthropic.messages.create({
-          model: 'claude-3-5-sonnet-latest',
-          max_tokens: 1024,
-          system: dynamicSystemInstruction || 'Act as a meeting copilot.',
-          messages: anthropicMessages
-        })
-
-        const text = response.content[0].text
-        if (text) {
-          conversationHistory.push({ role: 'model', content: text })
-          onAnswerReady(text, 'Claude 3.5 Sonnet')
-          return
-        }
-        throw new Error('Anthropic returned an empty response.')
-      } catch (anthropicErr) {
-        if (signal?.aborted) return
-        logRuntimeEvent('provider_failure', {
-          provider: 'Claude 3.5 Sonnet',
-          ...describeProviderError(anthropicErr)
-        })
-        onProviderStatus?.('Claude indisponível; tentando OpenAI novamente…')
-        console.warn(`[AI Service] Anthropic failed: ${anthropicErr.message}. Trying OpenAI...`)
-
-        // Quaternary: Retry the selected OpenAI model after the other providers.
-        try {
-          const text = await callOpenAI(dynamicSystemInstruction, conversationHistory)
-          conversationHistory.push({ role: 'model', content: text })
-          onAnswerReady(text, openaiModels[openaiModel])
-          return
-        } catch (openaiErr) {
-          logRuntimeEvent('provider_failure', {
-            provider: openaiModels[openaiModel],
-            ...describeProviderError(openaiErr)
-          })
-          console.error(
-            `[AI Service] All AI Fallback layers exhausted. Final error: ${openaiErr.message}`
-          )
-          const configuredProviders = [
-            process.env.OPENAI_API_KEY && 'OPENAI_API_KEY',
-            process.env.GEMINI_API_KEY && 'GEMINI_API_KEY',
-            process.env.ANTHROPIC_API_KEY && 'ANTHROPIC_API_KEY',
-            useOllama && 'Ollama'
-          ].filter(Boolean)
-          onProviderStatus?.(
-            configuredProviders.length
-              ? 'Nenhum provedor respondeu. Verifique as chaves e a conexão.'
-              : 'Nenhum provedor configurado. Configure uma chave no .env ou ative o Ollama.'
-          )
-        }
-      }
     }
   }
 }

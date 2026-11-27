@@ -5,20 +5,21 @@ import { join } from 'path'
 const settingsFileName = 'meeting-settings.json'
 const allowedFields = [
   'meetingContext',
+  'terminology',
   'harnessPath',
   'projectPaths',
   'obsidianVaultPath',
   'audioOutputDevice',
   'transcriberModel',
   'language',
-  'useOllama',
-  'openaiModel',
   'autoAnswer',
   'showLivePreview',
   'transcriptCollapsed',
   'answerCount',
   'autoHeight',
-  'showManualQuestion'
+  'showManualQuestion',
+  'theme',
+  'backgroundOpacity'
 ]
 
 function getSettingsPath() {

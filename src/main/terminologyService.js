@@ -1,5 +1,4 @@
-import fs from 'fs/promises'
-import { join } from 'path'
+import { correctWithVocabulary, setPriorityTerms } from './vocabularyService.js'
 
 let replacements = []
 let canonicalTerms = []
@@ -8,7 +7,7 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** Parses `Canonical: alias 1, alias 2` lines supplied by the meeting owner. */
+/** Accepts the glossary as `{ canonical, aliases }` entries. */
 export function configureTerminology(entries = []) {
   const validEntries = entries
     .filter((entry) => typeof entry?.canonical === 'string')
@@ -18,7 +17,7 @@ export function configureTerminology(entries = []) {
         ...new Set(
           [canonical, ...aliases].filter((alias) => typeof alias === 'string' && alias.trim())
         )
-      ]
+      ].map((alias) => alias.trim())
     }))
     .filter((entry) => entry.canonical)
 
@@ -26,22 +25,49 @@ export function configureTerminology(entries = []) {
   replacements = validEntries
     .flatMap(({ canonical, aliases }) => aliases.map((alias) => ({ canonical, alias })))
     .sort((first, second) => second.alias.length - first.alias.length)
+  setPriorityTerms(canonicalTerms)
 }
 
-/** Loads the editable terminology grammar stored beside the project. */
-export async function loadTerminologyFile() {
-  const path = join(process.cwd(), 'meeting-grammar.json')
-  try {
-    const grammar = JSON.parse(await fs.readFile(path, 'utf8'))
-    configureTerminology(Array.isArray(grammar.terms) ? grammar.terms : [])
-    return { path, count: canonicalTerms.length, error: null }
-  } catch (error) {
-    configureTerminology([])
-    return { path, count: 0, error: error.message }
-  }
+/**
+ * Reads the glossary typed in the setup screen: one term per line, written as
+ * `Canônico: variação 1, variação 2`. Lines starting with `#` are comments.
+ */
+export function parseTerminologyText(text = '') {
+  return String(text)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => {
+      const separator = line.indexOf(':')
+      if (separator < 0) return { canonical: line, aliases: [] }
+      return {
+        canonical: line.slice(0, separator).trim(),
+        aliases: line
+          .slice(separator + 1)
+          .split(',')
+          .map((alias) => alias.trim())
+          .filter(Boolean)
+      }
+    })
+    .filter((entry) => entry.canonical)
 }
 
-/** Corrects known meeting terminology without modifying unrelated text. */
+/** Writes entries back in the format `parseTerminologyText` reads. */
+export function formatTerminology(entries = []) {
+  return entries
+    .map(({ canonical, aliases = [] }) => {
+      const variations = aliases.filter(
+        (alias) => alias.toLocaleLowerCase('pt-BR') !== canonical.toLocaleLowerCase('pt-BR')
+      )
+      return variations.length ? `${canonical}: ${variations.join(', ')}` : canonical
+    })
+    .join('\n')
+}
+
+/**
+ * Corrects known meeting terminology without modifying unrelated text: first the typed variations,
+ * then names from the knowledge base that Whisper wrote the way they sound.
+ */
 export function correctTerminology(text = '') {
   let corrected = text
   for (const { canonical, alias } of replacements) {
@@ -51,7 +77,7 @@ export function correctTerminology(text = '') {
     )
     corrected = corrected.replace(expression, (_match, prefix) => `${prefix}${canonical}`)
   }
-  return corrected
+  return correctWithVocabulary(corrected)
 }
 
 export function getCanonicalTerminology() {

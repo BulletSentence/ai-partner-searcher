@@ -1,7 +1,8 @@
 {
-  "name": "ai-assistant",
+  "name": "datawatch",
+  "productName": "DataWatch",
   "version": "1.0.0",
-  "description": "A local-first AI meeting copilot with live transcription and contextual answers",
+  "description": "DataWatch: local-first meeting copilot with live transcription and answers grounded in your notes",
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",
