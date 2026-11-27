@@ -52,7 +52,8 @@ import { exportFinalTranscript } from './harnessExport'
 import { loadHarnessSearchConfig, searchHarness } from './harnessSearch'
 import { findRelevantContext, getIndexedChunks, indexKnowledgeSources } from './contextService'
 import { isLikelyQuestion } from './questionDetector'
-import { logRuntimeEvent } from './runtimeLogger'
+import { logRuntimeEvent, setLogsDirectory } from './runtimeLogger'
+import { resolveAppPaths } from './appPaths'
 import { getMeetingSettings, saveMeetingSettings } from './meetingSettings'
 import {
   configureTerminology,
@@ -119,7 +120,15 @@ function buildVocabularyPrompt(meetingContext, language) {
   })
 }
 
-const meetingsDirectory = process.env.MEETINGS_DIR || join(process.cwd(), 'meetings')
+const appPaths = resolveAppPaths({
+  isPackaged: app.isPackaged,
+  cwd: process.cwd(),
+  documentsDir: app.getPath('documents'),
+  logsDir: app.getPath('logs'),
+  env: process.env
+})
+const meetingsDirectory = appPaths.meetings
+setLogsDirectory(appPaths.logs)
 // A microphone utterance waits this long so a matching utterance from the call can expose it as speaker echo.
 const MIC_ECHO_HOLD_MS = 2_500
 const RECENT_UTTERANCES = 30
@@ -925,6 +934,14 @@ app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.datawatch.app')
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(dockIcon)
   migrateLegacySettings()
+  // Created up front, so a folder that cannot be written shows up at startup and not mid-meeting.
+  try {
+    mkdirSync(meetingsDirectory, { recursive: true })
+    console.log(`[Paths] Meetings: ${meetingsDirectory} | Logs: ${appPaths.logs}`)
+  } catch (error) {
+    console.error(`[Paths] Cannot write meetings to ${meetingsDirectory}: ${error.message}`)
+    logRuntimeEvent('meetings_directory_unwritable', { message: error.message })
+  }
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

@@ -1,6 +1,17 @@
 import fs from 'fs/promises'
 import { join } from 'path'
 
+// The project's logs/ folder while developing; the main process points it elsewhere when installed.
+let logsDirectory = join(process.cwd(), 'logs')
+
+export function setLogsDirectory(directory) {
+  if (directory) logsDirectory = directory
+}
+
+export function getLogsDirectory() {
+  return logsDirectory
+}
+
 function safeValue(value) {
   return String(value || '')
     .replace(/sk-[A-Za-z0-9_-]+/g, '[redacted-api-key]')
@@ -16,8 +27,8 @@ export function logRuntimeEvent(event, details = {}) {
     ...Object.fromEntries(Object.entries(details).map(([key, value]) => [key, safeValue(value)]))
   }
   const fileName = `meeting-copilot-${date.toISOString().slice(0, 10)}.log`
-  const filePath = join(process.cwd(), 'logs', fileName)
-  fs.mkdir(join(process.cwd(), 'logs'), { recursive: true })
+  const filePath = join(logsDirectory, fileName)
+  fs.mkdir(logsDirectory, { recursive: true })
     .then(() => fs.appendFile(filePath, `${JSON.stringify(record)}\n`, 'utf8'))
     .catch((error) => console.error(`[Logger] Could not write runtime log: ${error.message}`))
 }
