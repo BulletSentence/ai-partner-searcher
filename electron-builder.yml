@@ -16,13 +16,12 @@ extraResources:
     to: bin
     filter:
       - whisper-stream*
-  # The live model and the voice detector. large-v3 (3 GB) is left out: without it the final
-  # transcript uses the same model as the meeting.
+  # Whisper models and the voice detector. large-v3-turbo transcribes the meeting live; large-v3
+  # (3 GB, more accurate) makes the final transcript after the meeting.
   - from: models
     to: models
     filter:
       - '**/*'
-      - '!ggml-large-v3.bin'
       - '!.gitkeep'
 win:
   executableName: datawatch
