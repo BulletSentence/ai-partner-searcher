@@ -49,14 +49,27 @@ function isWhisperModel(entry) {
 }
 
 /** Lists Whisper.cpp model files available in ./models. */
+// large-v3 is the most accurate but too slow to follow a conversation; turbo is the live choice.
+function describeModel(fileName) {
+  const name = fileName.replace(/^ggml-/, '').replace(/\.(bin|gguf)$/i, '')
+  const recommended = /turbo/.test(name)
+  const note = recommended
+    ? ' (recomendado para a reunião)'
+    : name === 'large-v3'
+      ? ' (mais preciso, lento ao vivo; usado na transcrição final)'
+      : ''
+  return { id: fileName, label: `${name}${note}`, recommended }
+}
+
 export function listTranscriptionModels() {
   try {
-    return readdirSync(modelsDirectory, { withFileTypes: true })
-      .filter(isWhisperModel)
-      .map((entry) => ({
-        id: entry.name,
-        label: entry.name.replace(/^ggml-/, '').replace(/\.(bin|gguf)$/i, '')
-      }))
+    return (
+      readdirSync(modelsDirectory, { withFileTypes: true })
+        .filter(isWhisperModel)
+        .map((entry) => describeModel(entry.name))
+        // The model recommended for live meetings comes first and is the default choice.
+        .sort((first, second) => Number(second.recommended) - Number(first.recommended))
+    )
   } catch (error) {
     if (error.code !== 'ENOENT') {
       console.error(`[Transcriber] Could not list Whisper models: ${error.message}`)

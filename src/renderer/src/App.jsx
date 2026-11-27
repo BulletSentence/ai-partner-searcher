@@ -309,9 +309,10 @@ function App() {
           const selectedModelIsAvailable = availableModels.some(
             (model) => model.id === current.transcriberModel
           )
-          return selectedModelIsAvailable || availableModels.length !== 1
-            ? current
-            : { ...current, transcriberModel: availableModels[0].id }
+          if (selectedModelIsAvailable || !availableModels.length) return current
+          // No saved choice (a fresh install): the model recommended for live meetings.
+          const preferred = availableModels.find((model) => model.recommended) || availableModels[0]
+          return { ...current, transcriberModel: preferred.id }
         })
       })
       .catch((err) => console.error('Error loading Whisper setup:', err))
