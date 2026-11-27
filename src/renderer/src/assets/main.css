@@ -130,6 +130,377 @@ body {
   }
 }
 
+/* Setup form: two columns that stack below 700 px (see the media query above). */
+.setup-column {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Two short selects side by side, one under the other when there is no room. */
+.setup-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.setup-pair > div {
+  flex: 1 1 160px;
+}
+
+/* Saved meetings fill the width and wrap instead of scrolling sideways. */
+.session-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr));
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.session-grid > :only-child:not([class]) {
+  grid-column: 1 / -1;
+}
+
+/* Confirmation modal over the setup screen. */
+.modal-backdrop {
+  position: absolute;
+  inset: 30px 0 0 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(5, 5, 10, 0.7);
+  backdrop-filter: blur(4px);
+  border-radius: 0 0 16px 16px;
+}
+
+.modal-card {
+  width: min(100%, 400px);
+  padding: 20px 22px;
+  border-radius: 14px;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  background: rgba(24, 24, 32, 0.98);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+  color: #e2e8f0;
+}
+
+.modal-card h3 {
+  margin: 0 0 12px;
+  font-size: 1.05rem;
+  color: #f87171;
+}
+
+.modal-card p {
+  margin: 0 0 12px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #94a3b8;
+}
+
+.modal-card .modal-meeting {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #f1f5f9;
+  font-weight: 600;
+}
+
+.modal-meeting span {
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: #64748b;
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.modal-button {
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.modal-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.modal-button-danger {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+}
+
+.modal-button-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.3);
+}
+
+.modal-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Settings: API keys and the model the agent answers with. */
+.topbar-text-button {
+  background: none;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 6px;
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 8px;
+}
+
+.topbar-text-button:hover {
+  border-color: rgba(34, 211, 238, 0.5);
+  color: #e2e8f0;
+}
+
+.modal-card.settings-card {
+  width: min(100%, 620px);
+  max-height: 100%;
+  overflow-y: auto;
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.modal-card.settings-card h3 {
+  margin: 0;
+  color: #e2e8f0;
+}
+
+.settings-section {
+  padding: 14px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-section h4 {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+  color: #cbd5e1;
+}
+
+.settings-key-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+
+.settings-key-row input {
+  flex: 1 1 240px;
+  width: auto !important;
+}
+
+.modal-card .settings-note {
+  margin: 6px 0 0;
+  font-size: 0.7rem;
+  color: #64748b;
+}
+
+.settings-message {
+  margin: 4px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(34, 197, 94, 0.08);
+  color: #86efac;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.settings-message.is-error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #fca5a5;
+}
+
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+
+.settings-check input {
+  width: 16px !important;
+  height: 16px;
+  accent-color: #22d3ee;
+}
+
+.provider-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.provider-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 160px;
+  font-size: 0.8rem;
+}
+
+.provider-info span {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.provider-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 2 1 280px;
+}
+
+.provider-controls select {
+  flex: 1 1 160px;
+  width: auto !important;
+}
+
+.provider-tag {
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  color: #67e8f9;
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.modal-button-primary {
+  border-color: rgba(34, 211, 238, 0.5);
+  background: rgba(34, 211, 238, 0.15);
+  color: #a5f3fc;
+}
+
+.agent-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.agent-summary span {
+  flex: 1 1 200px;
+}
+
+/* Light theme: the dark palette inverted, with hues turned back so accents keep their color. */
+[data-theme='light'] .app-shell {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* Inverted twice: switches and checkboxes keep their real colors in the light theme. */
+[data-theme='light'] .keep-colors,
+[data-theme='light'] .app-shell input[type='checkbox'] {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+.provider-info strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-info .provider-tag {
+  color: #67e8f9;
+  font-size: 0.62rem;
+}
+
+.settings-segmented {
+  display: inline-flex;
+  margin-bottom: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.settings-segmented button {
+  padding: 6px 16px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-segmented button + button {
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.settings-segmented button.is-active {
+  background: rgba(34, 211, 238, 0.15);
+  color: #a5f3fc;
+}
+
+.settings-range {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: #cbd5e1;
+}
+
+.settings-range span {
+  display: flex;
+  justify-content: space-between;
+}
+
+.settings-range input {
+  accent-color: #22d3ee;
+}
+
+.session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.harness-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(134, 239, 172, 0.35);
+  background: rgba(34, 197, 94, 0.1);
+  color: #86efac;
+  font-size: 0.65rem;
+  font-weight: 600;
+  cursor: default;
+}
+
 .source-path {
   padding: 7px 10px;
   border: 1px solid rgba(34, 211, 238, 0.2);
@@ -151,13 +522,33 @@ body {
   color: #cbd5e1;
   font-size: 0.75rem;
 }
-.hud-options label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
-.hud-options input { width: auto; accent-color: #22d3ee; }
-.hud-options button { background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3); border-radius: 6px; padding: 5px 9px; color: #a5f3fc; cursor: pointer; }
+.hud-options label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.hud-options input {
+  width: auto;
+  accent-color: #22d3ee;
+}
+.hud-options button {
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  border-radius: 6px;
+  padding: 5px 9px;
+  color: #a5f3fc;
+  cursor: pointer;
+}
 
 @media (max-width: 700px) {
-  .transcript-collapsed .hud-dashboard { overflow: hidden !important; }
-  .transcript-collapsed .hud-panel { flex: 1 1 auto !important; min-height: 0; }
+  .transcript-collapsed .hud-dashboard {
+    overflow: hidden !important;
+  }
+  .transcript-collapsed .hud-panel {
+    flex: 1 1 auto !important;
+    min-height: 0;
+  }
 }
 
 .setup-topbar {
@@ -264,7 +655,6 @@ body {
   color: #64748b;
   font-size: 0.65rem;
 }
-
 
 .answer-count-select {
   width: auto !important;

@@ -9,7 +9,7 @@ import {
   screen,
   session
 } from 'electron'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { listAudioOutputs, startAudioCapture } from './audioCapture'
@@ -35,23 +35,69 @@ import {
   getDefaultMeetingProfile
 } from './aiService'
 import { captureScreenAndExtractText } from './screenCapture'
-import { createMeetingRecorder, listSavedMeetings, speakerLabel } from './meetingRecorder'
+import {
+  createMeetingRecorder,
+  listSavedMeetings,
+  resolveSavedMeetingPath,
+  speakerLabel
+} from './meetingRecorder'
 import { isEchoOfOthers, isUsableTranscript } from './transcriptFilter'
 import { transcribeRecording } from './finalTranscription'
 import { readFile } from 'fs/promises'
+import { existsSync } from 'fs'
+import { setTimeout as sleep } from 'timers/promises'
 import { exportFinalTranscript } from './harnessExport'
 import { loadHarnessSearchConfig, searchHarness } from './harnessSearch'
-import { findRelevantContext, indexKnowledgeSources } from './contextService'
+import { findRelevantContext, getIndexedChunks, indexKnowledgeSources } from './contextService'
 import { isLikelyQuestion } from './questionDetector'
 import { logRuntimeEvent } from './runtimeLogger'
 import { getMeetingSettings, saveMeetingSettings } from './meetingSettings'
 import {
+  configureTerminology,
   correctTerminology,
+  formatTerminology,
   getCanonicalTerminology,
-  loadTerminologyFile
+  parseTerminologyText
 } from './terminologyService'
+import { buildVocabulary, selectPromptTerms } from './vocabularyService'
+import {
+  addProviderKey,
+  configureOllama,
+  getProviderState,
+  refreshProviderModels,
+  removeProvider,
+  selectAgentModel
+} from './providerSettings'
+import defaultGrammar from '../../meeting-grammar.json'
 
 let mainWindow = null
+
+// The glossary shipped with the app; once edited in the setup screen, the saved text replaces it.
+const DEFAULT_TERMINOLOGY = formatTerminology(defaultGrammar.terms || [])
+
+function applyTerminology(text) {
+  const entries = parseTerminologyText(typeof text === 'string' ? text : DEFAULT_TERMINOLOGY)
+  configureTerminology(entries)
+  return entries.length
+}
+
+/**
+ * Whisper's vocabulary: the typed glossary first, then names learned from the notes, preferring
+ * those in the notes that match the meeting context.
+ */
+function buildVocabularyPrompt(meetingContext, language) {
+  const glossary = getCanonicalTerminology()
+  const relatedText = meetingContext
+    ? findRelevantContext(meetingContext, { limit: 12 })
+        .map((chunk) => chunk.content)
+        .join('\n')
+    : ''
+  return buildWhisperPrompt({
+    meetingContext,
+    terms: [...glossary, ...selectPromptTerms({ relatedText, exclude: glossary })],
+    language
+  })
+}
 
 const meetingsDirectory = process.env.MEETINGS_DIR || join(process.cwd(), 'meetings')
 // A microphone utterance waits this long so a matching utterance from the call can expose it as speaker echo.
@@ -113,7 +159,7 @@ async function startFinalTranscription(folder) {
     const binary = getWhisperBinary()
     if (!binary || !modelFile) throw new Error('O Whisper não está configurado.')
 
-    await loadTerminologyFile()
+    applyTerminology((await getMeetingSettings()).terminology)
     const context = summary?.meeting?.context
     report('running', { progress: 0 })
     await transcribeRecording({
@@ -123,11 +169,7 @@ async function startFinalTranscription(folder) {
       vadModelPath: getVadModelPath(),
       modelLabel: modelFile.replace(/^ggml-/, '').replace(/\.(bin|gguf)$/i, ''),
       language,
-      prompt: buildWhisperPrompt({
-        meetingContext: context && context !== 'N/A' ? context : '',
-        terms: getCanonicalTerminology(),
-        language
-      }),
+      prompt: buildVocabularyPrompt(context && context !== 'N/A' ? context : '', language),
       correctText: correctTerminology,
       signal: controller.signal,
       onProgress: (progress) => report('running', { progress })
@@ -252,7 +294,8 @@ async function generateMeetingAnswer(questionText) {
   )
 }
 
-// When true the window is hidden from screen sharing / screenshots.
+// The window starts hidden from screen sharing and screenshots; the setup screen can turn it off.
+// The choice is not saved, so every launch starts protected again.
 const CONTENT_PROTECTION = true
 
 function createWindow() {
@@ -633,12 +676,7 @@ ipcMain.on('start-meeting', async (_event, data) => {
   // Load the matching local speech recognition model before audio capture begins.
   const meetingProfile = configureAI(data)
   harnessSearchConfig = await loadHarnessSearchConfig(data)
-  const grammar = await loadTerminologyFile()
-  if (grammar.error) {
-    console.warn(`[Terminology] Could not load ${grammar.path}: ${grammar.error}`)
-  } else {
-    console.log(`[Terminology] Loaded ${grammar.count} grammar term(s) from ${grammar.path}`)
-  }
+  console.log(`[Terminology] Loaded ${applyTerminology(data?.terminology)} glossary term(s).`)
   currentAudioOutputDevice =
     typeof data?.audioOutputDevice === 'string' ? data.audioOutputDevice : ''
   recentUtterances = []
@@ -662,11 +700,7 @@ ipcMain.on('start-meeting', async (_event, data) => {
   // The vocabulary prompt makes Whisper expect the meeting's own names and acronyms.
   setTranscriptionHandlers({ onFinal: handleFinalUtterance, onPartial: handlePartialUtterance })
   configureTranscriber(meetingProfile.language, data?.transcriberModel, {
-    prompt: buildWhisperPrompt({
-      meetingContext: meetingProfile.meetingContext,
-      terms: getCanonicalTerminology(),
-      language: meetingProfile.language
-    })
+    prompt: buildVocabularyPrompt(meetingProfile.meetingContext, meetingProfile.language)
   })
 
   // Start audio capture in system monitor mode initially
@@ -684,7 +718,13 @@ ipcMain.on('start-meeting', async (_event, data) => {
 // can report an actionable status without delaying audio capture unexpectedly.
 ipcMain.handle('prepare-knowledge-sources', async (_event, data) => {
   activeSourceFilter = 'all'
-  return indexKnowledgeSources(data)
+  const status = await indexKnowledgeSources(data)
+  // Names in the notes become vocabulary for the transcription; this runs once, before the meeting.
+  const vocabulary = buildVocabulary(getIndexedChunks())
+  console.log(
+    `[Vocabulary] Learned ${vocabulary.terms} name(s) from the notes in ${vocabulary.ms} ms.`
+  )
+  return { ...status, vocabularyTerms: vocabulary.terms }
 })
 
 ipcMain.handle('get-audio-outputs', () => listAudioOutputs())
@@ -780,6 +820,49 @@ ipcMain.handle('get-saved-meetings', async () => {
   }
 })
 
+// AI providers. Every handler answers with the public state (never a key) or an error message.
+async function providerAction(action) {
+  try {
+    const result = await action()
+    return { ...(result || {}), state: await getProviderState() }
+  } catch (error) {
+    return { error: error.message, state: await getProviderState() }
+  }
+}
+ipcMain.handle('ai-providers:get', () => getProviderState())
+ipcMain.handle('ai-providers:add-key', (_event, key) => providerAction(() => addProviderKey(key)))
+ipcMain.handle('ai-providers:remove', (_event, id) => providerAction(() => removeProvider(id)))
+ipcMain.handle('ai-providers:select', (_event, { provider, model } = {}) =>
+  providerAction(() => selectAgentModel(provider, model))
+)
+ipcMain.handle('ai-providers:refresh', (_event, id) =>
+  providerAction(() => refreshProviderModels(id))
+)
+ipcMain.handle('ai-providers:ollama', (_event, options) =>
+  providerAction(() => configureOllama(options))
+)
+
+// The renderer asks for confirmation first; deleting goes through the system Trash so a mistake can be undone.
+ipcMain.handle('delete-meeting', async (_event, filename) => {
+  const path = await resolveSavedMeetingPath(meetingsDirectory, filename)
+  if (!path) return { error: 'Reunião não encontrada.' }
+  if (meetingRecorder && resolve(meetingRecorder.dir) === resolve(path)) {
+    return { error: 'Esta reunião ainda está sendo gravada.' }
+  }
+  if (finalTranscriptionJob && resolve(finalTranscriptionJob.folder) === resolve(path)) {
+    finalTranscriptionJob.controller.abort()
+  }
+  try {
+    await shell.trashItem(path)
+    // The Trash move can finish a moment after the promise; the history is read again right after.
+    for (let attempt = 0; attempt < 20 && existsSync(path); attempt += 1) await sleep(50)
+    return { deleted: true }
+  } catch (error) {
+    console.error(`[Meeting] Could not move ${path} to the Trash: ${error.message}`)
+    return { error: 'Não foi possível mover a reunião para a Lixeira.' }
+  }
+})
+
 ipcMain.on('open-meeting-folder', (_event, folder) => {
   // Only folders inside the meetings directory may be opened from the renderer.
   if (isMeetingFolder(folder)) shell.openPath(folder)
@@ -799,10 +882,18 @@ ipcMain.on('generate-final-transcript', (_event, folder) => {
 })
 
 // Persistent profile values are intentionally exposed without API keys.
+ipcMain.handle('set-content-protection', (_event, enabled) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return CONTENT_PROTECTION
+  mainWindow.setContentProtection(enabled === true)
+  return mainWindow.isContentProtected()
+})
 ipcMain.handle('get-content-protection', () =>
   mainWindow && !mainWindow.isDestroyed() ? mainWindow.isContentProtected() : CONTENT_PROTECTION
 )
-ipcMain.handle('get-default-meeting-profile', () => getDefaultMeetingProfile())
+ipcMain.handle('get-default-meeting-profile', () => ({
+  ...getDefaultMeetingProfile(),
+  terminology: DEFAULT_TERMINOLOGY
+}))
 ipcMain.handle('get-meeting-settings', () => getMeetingSettings())
 ipcMain.handle('save-meeting-settings', async (_event, settings) => {
   await saveMeetingSettings(settings)

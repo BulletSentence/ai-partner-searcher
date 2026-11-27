@@ -2,6 +2,28 @@ import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+function withoutDeleted(sessions, deleted) {
+  return (Array.isArray(sessions) ? sessions : []).filter(
+    (session) => !deleted.has(session.filename)
+  )
+}
+
+// Shown on a saved meeting once its final transcript has been sent to the Harness.
+function harnessBadge(session) {
+  const exports = session.data.harnessExports
+  if (!Array.isArray(exports) || !exports.length) return null
+  const last = exports[exports.length - 1]
+  const when = new Date(last.exportedAt).toLocaleString('pt-BR')
+  return (
+    <span
+      className="harness-badge"
+      title={`Enviada ao Harness em ${when}\n${last.path}${exports.length > 1 ? `\n(${exports.length} envios)` : ''}`}
+    >
+      Enviada ao Harness
+    </span>
+  )
+}
+
 function renderContentProtectionBadge(isProtected) {
   if (isProtected === null) return null
   return (
@@ -17,16 +39,18 @@ function renderContentProtectionBadge(isProtected) {
       }
       style={{
         flex: '0 0 auto',
-        width: '14px',
-        overflow: 'hidden',
-        fontSize: '0.7rem',
-        lineHeight: 1,
-        textAlign: 'center',
+        padding: '1px 6px',
+        borderRadius: '999px',
+        border: `1px solid ${isProtected ? 'rgba(134, 239, 172, 0.35)' : 'rgba(251, 191, 36, 0.4)'}`,
+        color: isProtected ? '#86efac' : '#fbbf24',
+        fontSize: '0.62rem',
+        fontWeight: 600,
+        lineHeight: 1.4,
         whiteSpace: 'nowrap',
         cursor: 'default'
       }}
     >
-      {isProtected ? '🙈' : '👁️'}
+      {isProtected ? 'Privado' : 'Visível'}
     </span>
   )
 }
@@ -37,14 +61,14 @@ function App() {
   // Form State
   const [formData, setFormData] = useState({
     meetingContext: '',
+    // Glossary lines: `Nome certo: variação 1, variação 2`.
+    terminology: '',
     harnessPath: '',
     projectPaths: '',
     obsidianVaultPath: '',
     audioOutputDevice: '',
     transcriberModel: '',
     language: 'pt-BR',
-    useOllama: false,
-    openaiModel: 'gpt-6-luna',
     autoAnswer: true,
     showLivePreview: false,
     transcriptCollapsed: true,
@@ -53,7 +77,10 @@ function App() {
     // Window height follows the length of the answers during the meeting.
     autoHeight: true,
     // The manual question field in the answers panel.
-    showManualQuestion: true
+    showManualQuestion: true,
+    // Appearance: dark or light palette, and how opaque the window background is (30–100).
+    theme: 'dark',
+    backgroundOpacity: 62
   })
 
   // History Log States
@@ -211,11 +238,15 @@ function App() {
     return { running: false, text: '' }
   }
 
+  // Meetings deleted in this window. A listing taken while the Trash move is still finishing
+  // would otherwise bring them back.
+  const deletedMeetingsRef = useRef(new Set())
+
   // Load saved sessions when returning to the setup screen
   const loadSavedSessions = async () => {
     try {
       const sessions = await window.api.getSavedMeetings()
-      setSavedSessions(sessions)
+      setSavedSessions(withoutDeleted(sessions, deletedMeetingsRef.current))
     } catch (err) {
       console.error('Error loading saved sessions:', err)
     }
@@ -227,6 +258,13 @@ function App() {
       .then(setIsContentProtected)
       .catch(() => setIsContentProtected(null))
   }, [])
+
+  const toggleContentProtection = () => {
+    window.api
+      .setContentProtection(!isContentProtected)
+      .then(setIsContentProtected)
+      .catch((err) => console.error('Error changing privacy mode:', err))
+  }
 
   useEffect(() => {
     if (!isSetupComplete) {
@@ -316,7 +354,7 @@ function App() {
       window.api
         .getSavedMeetings()
         .then((sessions) => {
-          setSavedSessions(sessions)
+          setSavedSessions(withoutDeleted(sessions, deletedMeetingsRef.current))
           setSelectedSession(
             (current) => sessions.find((session) => session.folder === current?.folder) || current
           )
@@ -328,7 +366,7 @@ function App() {
       setSavedMeetingFolder(folder || '')
       window.api
         .getSavedMeetings()
-        .then(setSavedSessions)
+        .then((sessions) => setSavedSessions(withoutDeleted(sessions, deletedMeetingsRef.current)))
         .catch(() => {})
     })
 
@@ -517,10 +555,134 @@ function App() {
       if (result?.error) throw new Error(result.error)
       if (!result?.path) throw new Error('O aplicativo não confirmou o arquivo salvo.')
       setExportNotice({ text: `Transcrição enviada para: ${result.path}` })
+      await loadSavedSessions()
     } catch (error) {
       setExportNotice({ error: true, text: `Não foi possível exportar: ${error.message}` })
     } finally {
       setExportStatus((current) => ({ ...current, [folder]: { busy: false } }))
+    }
+  }
+
+  // The theme and the background opacity apply to the whole window, setup and meeting alike.
+  useEffect(() => {
+    const root = document.documentElement
+    root.dataset.theme = formData.theme === 'light' ? 'light' : 'dark'
+    const opacity = Math.min(100, Math.max(30, Number(formData.backgroundOpacity) || 62)) / 100
+    root.style.setProperty('--hud-alpha', String(opacity))
+    // The setup form is read, not glanced at: it stays more opaque than the meeting overlay.
+    root.style.setProperty('--setup-alpha', String(Math.min(1, opacity + 0.33)))
+  }, [formData.theme, formData.backgroundOpacity])
+
+  // AI providers as the main process describes them: no key ever reaches this screen.
+  const [aiState, setAiState] = useState({
+    providers: [],
+    primary: null,
+    encryptionAvailable: true
+  })
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [providerBusy, setProviderBusy] = useState('')
+  const [providerMessage, setProviderMessage] = useState(null)
+  const [ollamaUrl, setOllamaUrl] = useState('')
+
+  const configuredProviders = aiState.providers.filter((provider) => provider.configured)
+  const primaryProvider = configuredProviders.find((provider) => provider.id === aiState.primary)
+  const agentChoice = primaryProvider ? `${primaryProvider.id}::${primaryProvider.model}` : ''
+
+  useEffect(() => {
+    window.api
+      .getAiProviders()
+      .then((state) => state && setAiState(state))
+      .catch((err) => console.error('Error loading AI providers:', err))
+  }, [])
+
+  // Runs one settings action; the main process always answers with the fresh public state.
+  const runProviderAction = async (busyKey, action, successText) => {
+    setProviderBusy(busyKey)
+    setProviderMessage(null)
+    try {
+      const result = await action()
+      if (result?.state) setAiState(result.state)
+      if (result?.error) throw new Error(result.error)
+      const text = typeof successText === 'function' ? successText(result) : successText
+      if (text) setProviderMessage({ text })
+      return result
+    } catch (error) {
+      setProviderMessage({ error: true, text: error.message })
+      return null
+    } finally {
+      setProviderBusy('')
+    }
+  }
+
+  const providerName = (id) => aiState.providers.find((provider) => provider.id === id)?.label || id
+
+  const addApiKey = async () => {
+    const key = apiKeyInput.trim()
+    if (!key) return
+    const result = await runProviderAction(
+      'add',
+      () => window.api.addAiProviderKey(key),
+      (response) =>
+        `Chave ${providerName(response.provider)} verificada: ${response.models} modelo(s) disponível(is).`
+    )
+    if (result && !result.error) setApiKeyInput('')
+  }
+
+  const selectAgent = (value) => {
+    const [provider, model] = value.split('::')
+    if (provider && model)
+      runProviderAction('select', () => window.api.selectAgentModel(provider, model))
+  }
+
+  const openSettings = () => {
+    setProviderMessage(null)
+    setOllamaUrl(aiState.providers.find((provider) => provider.id === 'ollama')?.url || '')
+    setIsSettingsOpen(true)
+  }
+
+  // The meeting waiting for confirmation in the delete modal.
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  useEffect(() => {
+    if (!isSettingsOpen) return
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setIsSettingsOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isSettingsOpen])
+
+  useEffect(() => {
+    if (!pendingDelete) return
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !isDeleting) setPendingDelete(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [pendingDelete, isDeleting])
+
+  const confirmDeleteMeeting = async () => {
+    const session = pendingDelete
+    if (!session) return
+    setIsDeleting(true)
+    try {
+      const result = await window.api.deleteMeeting(session.filename)
+      if (result?.error) throw new Error(result.error)
+      if (!result?.deleted) return
+      // Gone from the list at once; the reload below then brings the rest up to date.
+      deletedMeetingsRef.current.add(session.filename)
+      setSavedSessions((current) => current.filter((item) => item.filename !== session.filename))
+      if (selectedSession?.filename === session.filename) setSelectedSession(null)
+      if (savedMeetingFolder && savedMeetingFolder === session.folder) setSavedMeetingFolder('')
+      setExportNotice({ text: 'Reunião movida para a Lixeira.' })
+      await loadSavedSessions()
+    } catch (error) {
+      setExportNotice({ error: true, text: `Não foi possível apagar: ${error.message}` })
+    } finally {
+      setIsDeleting(false)
+      setPendingDelete(null)
     }
   }
 
@@ -563,7 +725,7 @@ function App() {
           height: '100%',
           display: 'flex',
           flexDirection: 'column',
-          background: 'rgba(15, 15, 20, 0.95)',
+          background: 'rgba(15, 15, 20, var(--setup-alpha, 0.95))',
           backdropFilter: 'blur(30px)',
           borderRadius: '16px',
           border: '1px solid rgba(255, 255, 255, 0.08)',
@@ -664,9 +826,76 @@ function App() {
             className="bar-title"
             style={{ fontSize: '0.72rem', color: '#22d3ee', fontWeight: '600' }}
           >
-            🛸 Copilot de reuniões com IA
+            Copilot de reuniões
           </span>
-          <div style={{ display: 'flex', gap: '6px', WebkitAppRegion: 'no-drag' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              WebkitAppRegion: 'no-drag'
+            }}
+          >
+            <button
+              type="button"
+              onClick={openSettings}
+              title="Chaves de API e modelo do agente"
+              className="topbar-text-button"
+            >
+              Configurações
+            </button>
+            {isContentProtected !== null && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={isContentProtected}
+                onClick={toggleContentProtection}
+                title={
+                  isContentProtected
+                    ? 'Modo privacidade ligado: a janela não aparece em prints nem no compartilhamento de tela'
+                    : 'Modo privacidade desligado: a janela aparece em prints e no compartilhamento de tela'
+                }
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  background: 'none',
+                  border: 'none',
+                  color: isContentProtected ? '#86efac' : '#fbbf24',
+                  cursor: 'pointer',
+                  fontSize: '0.7rem',
+                  fontWeight: '600',
+                  padding: '2px 6px'
+                }}
+              >
+                <span className="btn-label">Privacidade</span>
+                <span
+                  aria-hidden="true"
+                  className="keep-colors"
+                  style={{
+                    position: 'relative',
+                    width: '26px',
+                    height: '14px',
+                    borderRadius: '999px',
+                    background: isContentProtected ? '#22c55e' : 'rgba(148, 163, 184, 0.4)',
+                    transition: 'background 0.2s'
+                  }}
+                >
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: '2px',
+                      left: isContentProtected ? '14px' : '2px',
+                      width: '10px',
+                      height: '10px',
+                      borderRadius: '50%',
+                      background: '#ffffff',
+                      transition: 'left 0.2s'
+                    }}
+                  />
+                </span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => window.api.minimize()}
@@ -700,6 +929,314 @@ function App() {
           </div>
         </div>
 
+        {isSettingsOpen && (
+          <div className="modal-backdrop" onClick={() => setIsSettingsOpen(false)}>
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="settings-title"
+              className="modal-card settings-card"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="settings-header">
+                <h3 id="settings-title">Configurações</h3>
+                <button
+                  type="button"
+                  className="modal-button"
+                  onClick={() => setIsSettingsOpen(false)}
+                >
+                  Fechar
+                </button>
+              </div>
+
+              <section className="settings-section">
+                <h4>Aparência</h4>
+                <div className="settings-segmented" role="radiogroup" aria-label="Tema">
+                  {[
+                    ['dark', 'Escuro'],
+                    ['light', 'Claro']
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={formData.theme === value}
+                      className={formData.theme === value ? 'is-active' : ''}
+                      onClick={() => setFormData((current) => ({ ...current, theme: value }))}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <label className="settings-range">
+                  <span>
+                    Opacidade do fundo durante a reunião
+                    <strong>{formData.backgroundOpacity}%</strong>
+                  </span>
+                  <input
+                    type="range"
+                    min={30}
+                    max={100}
+                    step={5}
+                    value={formData.backgroundOpacity}
+                    onChange={(event) =>
+                      setFormData((current) => ({
+                        ...current,
+                        backgroundOpacity: Number(event.target.value)
+                      }))
+                    }
+                  />
+                </label>
+                <p className="settings-note">
+                  Mais baixo deixa ver o que está atrás da janela; o texto continua opaco. A tela de
+                  configuração fica sempre um pouco mais opaca.
+                </p>
+              </section>
+
+              <section className="settings-section">
+                <h4>Adicionar chave de API</h4>
+                <p>
+                  Cole uma chave da OpenAI, da Anthropic (Claude) ou do Google Gemini. O provedor é
+                  reconhecido pela chave, que é testada antes de ser salva.
+                </p>
+                <form
+                  className="settings-key-row"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    addApiKey()
+                  }}
+                >
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={apiKeyInput}
+                    onChange={(event) => setApiKeyInput(event.target.value)}
+                    placeholder="sk-…, sk-ant-… ou AIza…"
+                    aria-label="Chave de API"
+                    style={inputStyle}
+                  />
+                  <button
+                    type="submit"
+                    className="modal-button modal-button-primary"
+                    disabled={!apiKeyInput.trim() || Boolean(providerBusy)}
+                  >
+                    {providerBusy === 'add' ? 'Verificando…' : 'Adicionar'}
+                  </button>
+                </form>
+                {providerMessage && (
+                  <div
+                    role={providerMessage.error ? 'alert' : 'status'}
+                    className={`settings-message${providerMessage.error ? ' is-error' : ''}`}
+                  >
+                    {providerMessage.text}
+                  </div>
+                )}
+                <p className="settings-note">
+                  {aiState.encryptionAvailable
+                    ? 'As chaves ficam criptografadas com o chaveiro do sistema e não são exibidas de novo.'
+                    : 'A criptografia do sistema não está disponível; nenhuma chave pode ser salva.'}
+                </p>
+              </section>
+
+              <section className="settings-section">
+                <h4>Provedores</h4>
+                {aiState.providers
+                  .filter((provider) => provider.id !== 'ollama')
+                  .map((provider) => (
+                    <div key={provider.id} className="provider-row">
+                      <div className="provider-info">
+                        <strong>
+                          {provider.label}
+                          {provider.id === aiState.primary && (
+                            <span className="provider-tag">Em uso</span>
+                          )}
+                        </strong>
+                        <span>{provider.configured ? `Chave ${provider.hint}` : 'Sem chave'}</span>
+                      </div>
+                      {provider.configured && (
+                        <div className="provider-controls">
+                          <select
+                            aria-label={`Modelo ${provider.label}`}
+                            value={provider.model}
+                            onChange={(event) =>
+                              runProviderAction('select', () =>
+                                window.api.selectAgentModel(provider.id, event.target.value)
+                              )
+                            }
+                            style={inputStyle}
+                          >
+                            {provider.models.map((model) => (
+                              <option key={model} value={model}>
+                                {model}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className="modal-button"
+                            disabled={Boolean(providerBusy)}
+                            onClick={() =>
+                              runProviderAction(
+                                `refresh-${provider.id}`,
+                                () => window.api.refreshAiModels(provider.id),
+                                'Lista de modelos atualizada.'
+                              )
+                            }
+                          >
+                            {providerBusy === `refresh-${provider.id}`
+                              ? 'Atualizando…'
+                              : 'Atualizar'}
+                          </button>
+                          <button
+                            type="button"
+                            className="modal-button modal-button-danger"
+                            disabled={Boolean(providerBusy)}
+                            onClick={() =>
+                              runProviderAction(
+                                `remove-${provider.id}`,
+                                () => window.api.removeAiProvider(provider.id),
+                                `Chave ${provider.label} removida.`
+                              )
+                            }
+                          >
+                            Remover
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+              </section>
+
+              {(() => {
+                const ollama = aiState.providers.find((provider) => provider.id === 'ollama')
+                if (!ollama) return null
+                return (
+                  <section className="settings-section">
+                    <h4>Ollama local</h4>
+                    <p>Modelos rodando no próprio computador; nada é enviado para fora.</p>
+                    <label className="settings-check">
+                      <input
+                        type="checkbox"
+                        checked={ollama.enabled}
+                        disabled={Boolean(providerBusy)}
+                        onChange={(event) =>
+                          runProviderAction(
+                            'ollama',
+                            () =>
+                              window.api.configureOllama({
+                                enabled: event.target.checked,
+                                url: ollamaUrl
+                              }),
+                            event.target.checked ? 'Ollama conectado.' : 'Ollama desativado.'
+                          )
+                        }
+                      />
+                      Usar o Ollama
+                    </label>
+                    <div className="settings-key-row">
+                      <input
+                        value={ollamaUrl}
+                        onChange={(event) => setOllamaUrl(event.target.value)}
+                        placeholder="http://localhost:11434"
+                        aria-label="Endereço do Ollama"
+                        style={inputStyle}
+                      />
+                      <button
+                        type="button"
+                        className="modal-button"
+                        disabled={Boolean(providerBusy)}
+                        onClick={() =>
+                          runProviderAction(
+                            'ollama',
+                            () => window.api.configureOllama({ enabled: true, url: ollamaUrl }),
+                            (response) =>
+                              `Ollama conectado: ${response.state.providers.find((item) => item.id === 'ollama').models.length} modelo(s).`
+                          )
+                        }
+                      >
+                        {providerBusy === 'ollama' ? 'Conectando…' : 'Detectar modelos'}
+                      </button>
+                    </div>
+                    {ollama.configured && (
+                      <div className="provider-controls">
+                        <select
+                          aria-label="Modelo do Ollama"
+                          value={ollama.model}
+                          onChange={(event) =>
+                            runProviderAction('select', () =>
+                              window.api.selectAgentModel('ollama', event.target.value)
+                            )
+                          }
+                          style={inputStyle}
+                        >
+                          {ollama.models.map((model) => (
+                            <option key={model} value={model}>
+                              {model}
+                            </option>
+                          ))}
+                        </select>
+                        {ollama.id === aiState.primary && (
+                          <span className="provider-tag">Em uso</span>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                )
+              })()}
+            </div>
+          </div>
+        )}
+
+        {pendingDelete && (
+          <div className="modal-backdrop" onClick={() => !isDeleting && setPendingDelete(null)}>
+            <div
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="delete-modal-title"
+              aria-describedby="delete-modal-text"
+              className="modal-card"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 id="delete-modal-title">Apagar esta reunião?</h3>
+              <p className="modal-meeting text-content">
+                {pendingDelete.data.meeting?.context || 'Reunião sem contexto'}
+                {pendingDelete.data.timestamp && (
+                  <span>
+                    {new Date(pendingDelete.data.timestamp).toLocaleString('pt-BR', {
+                      dateStyle: 'short',
+                      timeStyle: 'short'
+                    })}
+                  </span>
+                )}
+              </p>
+              <p id="delete-modal-text">
+                O áudio, as transcrições e as respostas desta reunião vão para a Lixeira. Dá para
+                recuperar por lá, se precisar.
+              </p>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  autoFocus
+                  disabled={isDeleting}
+                  onClick={() => setPendingDelete(null)}
+                  className="modal-button"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={confirmDeleteMeeting}
+                  className="modal-button modal-button-danger"
+                >
+                  {isDeleting ? 'Apagando…' : 'Mover para a Lixeira'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Drawer overlay for inspecting a past session */}
         {selectedSession && (
           <div
@@ -729,7 +1266,7 @@ function App() {
             >
               <div className="text-content">
                 <h3 style={{ margin: 0, fontSize: '1.3rem', color: '#22d3ee', fontWeight: '700' }}>
-                  📂 Histórico da reunião: {selectedSession.data.meeting?.context || 'Sem contexto'}
+                  Histórico da reunião: {selectedSession.data.meeting?.context || 'Sem contexto'}
                 </h3>
                 <p style={{ margin: '4px 0 0 0', fontSize: '0.85rem', color: '#64748b' }}>
                   Gravada em {new Date(selectedSession.data.timestamp).toLocaleString('pt-BR')}
@@ -775,7 +1312,7 @@ function App() {
                     fontWeight: '600'
                   }}
                 >
-                  🎙️ Histórico completo da transcrição
+                  Histórico completo da transcrição
                 </h4>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {selectedSession.folder && (
@@ -883,7 +1420,7 @@ function App() {
                     fontWeight: '600'
                   }}
                 >
-                  🧠 Sugestões geradas pela IA
+                  Sugestões geradas pela IA
                 </h4>
                 {(selectedSession.data.conversationHistory || [])
                   .filter((msg) => msg.role === 'model' || msg.role === 'assistant')
@@ -916,15 +1453,15 @@ function App() {
                 letterSpacing: '0.5px'
               }}
             >
-              🛸 Configuração do Copilot
+              Configuração do Copilot
             </h2>
             <p style={{ margin: '0 0 1rem 0', fontSize: '0.82rem', color: '#64748b' }}>
               Descreva a conversa e escolha as fontes locais que poderão ajudar nas respostas.
             </p>
 
             <div className="setup-form-columns" style={{ display: 'flex', gap: '1.5rem' }}>
-              {/* Left Form Column */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {/* Meeting and transcription */}
+              <div className="setup-column">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
                     Contexto da reunião
@@ -938,6 +1475,134 @@ function App() {
                     onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
                   />
                 </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                    Glossário da transcrição
+                  </label>
+                  <textarea
+                    value={formData.terminology}
+                    onChange={(e) => setFormData({ ...formData, terminology: e.target.value })}
+                    placeholder={'Paketá: paqueta, paceta\nDataprev: data prev'}
+                    spellCheck={false}
+                    style={{
+                      ...inputStyle,
+                      height: '120px',
+                      resize: 'vertical',
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                      fontSize: '0.78rem'
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
+                    onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
+                  />
+                  <span style={{ fontSize: '0.72rem', color: '#64748b', lineHeight: 1.4 }}>
+                    Um termo por linha, como <code>Nome certo: variação 1, variação 2</code>. Os
+                    nomes próprios das notas do vault e dos projetos também são reconhecidos
+                    automaticamente.
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                    Modelo de transcrição
+                  </label>
+                  <select
+                    value={formData.transcriberModel}
+                    onChange={(e) => setFormData({ ...formData, transcriberModel: e.target.value })}
+                    style={inputStyle}
+                  >
+                    <option value="" disabled>
+                      {transcriptionModels.length
+                        ? 'Selecione um modelo'
+                        : 'Nenhum modelo encontrado'}
+                    </option>
+                    {transcriptionModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      color: transcriptionModels.length ? '#64748b' : '#f87171'
+                    }}
+                  >
+                    {transcriptionModels.length
+                      ? 'Modelo Whisper local usado para transformar áudio em texto.'
+                      : 'Nenhum modelo Whisper foi encontrado na pasta models.'}
+                    {!transcriberStatus.binaryFound && (
+                      <span style={{ display: 'block', marginTop: '4px' }}>
+                        Adaptador Whisper ausente. Execute <code>npm run whisper:build</code>.
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <div className="setup-pair">
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                      Idioma
+                    </label>
+                    <select
+                      value={formData.language}
+                      onChange={(e) => setFormData({ ...formData, language: e.target.value })}
+                      style={inputStyle}
+                    >
+                      <option value="pt-BR">Português</option>
+                      <option value="en-US">Inglês</option>
+                    </select>
+                  </div>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
+                      Modelo do agente
+                    </label>
+                    <select
+                      value={agentChoice}
+                      disabled={!configuredProviders.length}
+                      onChange={(event) => selectAgent(event.target.value)}
+                      style={inputStyle}
+                    >
+                      {!configuredProviders.length && (
+                        <option value="">Nenhum provedor configurado</option>
+                      )}
+                      {configuredProviders.map((provider) => (
+                        <optgroup key={provider.id} label={provider.label}>
+                          {provider.models.map((model) => (
+                            <option key={model} value={`${provider.id}::${model}`}>
+                              {model}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="agent-summary">
+                  <span className="text-content">
+                    {primaryProvider
+                      ? `Respostas com ${primaryProvider.short} (${primaryProvider.model})${
+                          primaryProvider.hint ? `, chave ${primaryProvider.hint}` : ''
+                        }.${
+                          configuredProviders.length > 1
+                            ? ` Se falhar, tenta ${configuredProviders
+                                .filter((provider) => provider.id !== primaryProvider.id)
+                                .map((provider) => provider.short)
+                                .join(', ')}.`
+                            : ''
+                        }`
+                      : 'Adicione uma chave de API ou ative o Ollama para o copiloto responder.'}
+                  </span>
+                  <button type="button" style={folderButtonStyle} onClick={openSettings}>
+                    Configurar provedores
+                  </button>
+                </div>
+                <span style={{ fontSize: '0.72rem', color: '#64748b', lineHeight: 1.4 }}>
+                  A transcrição é sempre local. Com um provedor em nuvem (OpenAI, Gemini, Claude), a
+                  pergunta e os trechos das notas usados na resposta são enviados a ele; com o
+                  Ollama, nada sai do computador.
+                </span>
+              </div>
+
+              {/* Local sources and audio */}
+              <div className="setup-column">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
                     Projetos para consultar
@@ -1005,31 +1670,36 @@ function App() {
                     </div>
                   )}
                 </div>
-                <div className="harness-destination">
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
                     Destino das transcrições no Harness
                   </label>
-                  <button
-                    type="button"
-                    style={folderButtonStyle}
-                    onClick={async () => {
-                      const result = await window.api.selectFolders(false)
-                      if (!result?.canceled)
-                        setFormData((current) => ({
-                          ...current,
-                          harnessPath: result.filePaths[0] || ''
-                        }))
-                    }}
-                  >
-                    Selecionar pasta
-                  </button>
-                  <div className="source-path">
-                    {formData.harnessPath ||
-                      'Selecione a pasta para exportar as transcrições finais.'}
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      style={folderButtonStyle}
+                      onClick={async () => {
+                        const result = await window.api.selectFolders(false)
+                        if (!result?.canceled)
+                          setFormData((current) => ({
+                            ...current,
+                            harnessPath: result.filePaths[0] || ''
+                          }))
+                      }}
+                    >
+                      Selecionar pasta
+                    </button>
                   </div>
-                  <small style={{ color: '#94a3b8' }}>
-                    Se houver uma subpasta HARNESS, o Markdown será salvo dentro dela.
-                  </small>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                    {formData.harnessPath
+                      ? 'Se houver uma subpasta HARNESS, o Markdown será salvo dentro dela.'
+                      : 'Nenhuma pasta selecionada. Opcional: destino das transcrições finais.'}
+                  </span>
+                  {formData.harnessPath && (
+                    <div className="source-path" title={formData.harnessPath}>
+                      {formData.harnessPath}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
@@ -1054,126 +1724,6 @@ function App() {
                     O copilot ouvirá o áudio reproduzido nessa saída.
                   </span>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                    Modelo de transcrição
-                  </label>
-                  <select
-                    value={formData.transcriberModel}
-                    onChange={(e) => setFormData({ ...formData, transcriberModel: e.target.value })}
-                    style={inputStyle}
-                  >
-                    <option value="" disabled>
-                      {transcriptionModels.length
-                        ? 'Selecione um modelo'
-                        : 'Nenhum modelo encontrado'}
-                    </option>
-                    {transcriptionModels.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.label}
-                      </option>
-                    ))}
-                  </select>
-                  <span
-                    style={{
-                      fontSize: '0.72rem',
-                      color: transcriptionModels.length ? '#64748b' : '#f87171'
-                    }}
-                  >
-                    {transcriptionModels.length
-                      ? 'Modelo Whisper local usado para transformar áudio em texto.'
-                      : 'Nenhum modelo Whisper foi encontrado na pasta models.'}
-                    {!transcriberStatus.binaryFound && (
-                      <span style={{ display: 'block', marginTop: '4px' }}>
-                        Adaptador Whisper ausente. Execute <code>npm run whisper:build</code>.
-                      </span>
-                    )}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                      Idioma
-                    </label>
-                    <select
-                      value={formData.language}
-                      onChange={(e) => setFormData({ ...formData, language: e.target.value })}
-                      style={inputStyle}
-                    >
-                      <option value="pt-BR">Português</option>
-                      <option value="en-US">Inglês</option>
-                    </select>
-                  </div>
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                      Modelo OpenAI
-                    </label>
-                    <select
-                      value={formData.openaiModel}
-                      onChange={(e) => setFormData({ ...formData, openaiModel: e.target.value })}
-                      style={inputStyle}
-                    >
-                      <option value="gpt-6-luna">GPT-6 Luna</option>
-                      <option value="gpt-4o-mini">GPT-4o Mini</option>
-                    </select>
-                  </div>
-                </div>
-                <div
-                  style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}
-                >
-                  <input
-                    type="checkbox"
-                    id="useOllama"
-                    checked={formData.useOllama || false}
-                    onChange={(e) => setFormData({ ...formData, useOllama: e.target.checked })}
-                    style={{
-                      cursor: 'pointer',
-                      width: '16px',
-                      height: '16px',
-                      accentColor: '#22d3ee'
-                    }}
-                  />
-                  <label
-                    htmlFor="useOllama"
-                    className="text-content"
-                    style={{
-                      fontSize: '0.85rem',
-                      color: '#cbd5e1',
-                      fontWeight: '600',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Usar modelo local do Ollama (gemma2:2b / offline)
-                  </label>
-                </div>
-              </div>
-
-              {/* Right Form Column */}
-              <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                    Como serão usadas as fontes locais
-                  </label>
-                  <textarea
-                    value="Na próxima rajada, o app vai ler localmente os projetos e o vault indicados acima para encontrar respostas rápidas, mesmo se o MCP do Obsidian não responder."
-                    readOnly
-                    style={{ ...inputStyle, height: '70px', resize: 'none' }}
-                    onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
-                    onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
-                  />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '600' }}>
-                    Privacidade
-                  </label>
-                  <textarea
-                    value="A transcrição é local. Quando você usar um provedor de IA em nuvem, a pergunta e o contexto necessário para respondê-la poderão ser enviados ao provedor."
-                    readOnly
-                    style={{ ...inputStyle, height: '70px', resize: 'none' }}
-                    onFocus={(e) => (e.target.style.borderColor = 'rgba(34, 211, 238, 0.5)')}
-                    onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
-                  />
-                </div>
                 {indexStatus && (
                   <div
                     style={{
@@ -1185,8 +1735,11 @@ function App() {
                       background: 'rgba(255,255,255,0.03)'
                     }}
                   >
-                    Índice local: {indexStatus.files} arquivo(s), {indexStatus.chunks} trecho(s).
-                    {indexStatus.errors?.length ? ` ${indexStatus.errors[0]}` : ''}
+                    Índice local: {indexStatus.files} arquivo(s), {indexStatus.chunks} trecho(s)
+                    {indexStatus.vocabularyTerms
+                      ? `, ${indexStatus.vocabularyTerms} nome(s) próprio(s) aprendido(s)`
+                      : ''}
+                    .{indexStatus.errors?.length ? ` ${indexStatus.errors[0]}` : ''}
                   </div>
                 )}
               </div>
@@ -1203,7 +1756,7 @@ function App() {
                 fontWeight: '600'
               }}
             >
-              📂 Histórico de sessões salvas
+              Histórico de sessões salvas
             </h4>
             {exportNotice && (
               <div
@@ -1244,14 +1797,7 @@ function App() {
                   ' — transcrição final pronta'}
               </button>
             )}
-            <div
-              style={{
-                display: 'flex',
-                gap: '12px',
-                overflowX: 'auto',
-                paddingBottom: '4px'
-              }}
-            >
+            <div className="session-grid">
               {savedSessions.length === 0 ? (
                 <div
                   style={{
@@ -1272,8 +1818,6 @@ function App() {
                       setSelectedSession(session)
                     }}
                     style={{
-                      flexShrink: 0,
-                      width: '230px',
                       background: 'rgba(255, 255, 255, 0.02)',
                       border: '1px solid rgba(255, 255, 255, 0.05)',
                       borderRadius: '12px',
@@ -1303,17 +1847,22 @@ function App() {
                     >
                       {session.data.meeting?.context || 'Reunião sem contexto'}
                     </div>
+                    {harnessBadge(session)}
                     <div
                       className="session-card-details"
                       style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '2px' }}
                     >
                       {session.data.meeting?.obsidianVaultPath || 'Sem vault configurado'}
                     </div>
-                    {session.folder && Array.isArray(session.data.finalTranscript) && (
-                      <div data-session-action onClick={(event) => event.stopPropagation()}>
+                    <div
+                      data-session-action
+                      className="session-actions"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {session.folder && Array.isArray(session.data.finalTranscript) && (
                         <button
                           type="button"
-                          style={{ ...folderButtonStyle, marginTop: '8px' }}
+                          style={folderButtonStyle}
                           disabled={exportStatus[session.folder]?.busy}
                           title={
                             formData.harnessPath || 'Clique para selecionar o destino do Harness'
@@ -1325,10 +1874,24 @@ function App() {
                         >
                           {exportStatus[session.folder]?.busy
                             ? 'Salvando…'
-                            : 'Enviar para o Harness'}
+                            : session.data.harnessExports?.length
+                              ? 'Enviar de novo'
+                              : 'Enviar para o Harness'}
                         </button>
-                      </div>
-                    )}
+                      )}
+                      <button
+                        type="button"
+                        aria-label="Apagar reunião"
+                        title="Mover esta reunião para a Lixeira"
+                        style={{ ...folderButtonStyle, color: '#f87171' }}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setPendingDelete(session)
+                        }}
+                      >
+                        Apagar
+                      </button>
+                    </div>
                     <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '6px' }}>
                       {new Date(session.data.timestamp).toLocaleDateString('pt-BR')} às{' '}
                       {new Date(session.data.timestamp).toLocaleTimeString('pt-BR', {
@@ -1371,7 +1934,7 @@ function App() {
                   ? 'Adaptador Whisper ausente'
                   : transcriptionModels.length === 0
                     ? 'Modelo Whisper ausente'
-                    : '🚀 Iniciar reunião'}
+                    : 'Iniciar reunião'}
             </button>
           </div>
         </div>
@@ -1387,7 +1950,7 @@ function App() {
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        background: 'rgba(15, 15, 20, 0.62)',
+        background: 'rgba(15, 15, 20, var(--hud-alpha, 0.62))',
         backdropFilter: 'blur(16px)',
         borderRadius: '16px',
         border: '1px solid rgba(255, 255, 255, 0.08)',
@@ -1483,7 +2046,7 @@ function App() {
           style={{ fontSize: '0.75rem', color: '#22d3ee', fontWeight: '600' }}
           title="Copilot de reuniões com IA — arraste para mover"
         >
-          🛸 <span className="hide-narrow">Copilot de reuniões</span>
+          Copilot de reuniões
         </span>
         <div
           className="hud-window-controls"
@@ -1507,8 +2070,7 @@ function App() {
               WebkitAppRegion: 'no-drag'
             }}
           >
-            {isClickThrough ? '🖱️' : '👻'}
-            <span className="btn-label">{isClickThrough ? ' Interagir' : ' Atravessar'}</span>
+            {isClickThrough ? 'Interagir' : 'Atravessar'}
           </button>
           <span
             onClick={handleStop}
@@ -1536,7 +2098,7 @@ function App() {
               e.target.style.transform = 'scale(1.0)'
             }}
           >
-            ⏹<span className="btn-label"> Encerrar</span>
+            Encerrar
           </span>
           <button
             onClick={() => window.api.minimize()}
@@ -1642,7 +2204,7 @@ function App() {
               setFormData((current) => ({ ...current, showLivePreview: e.target.checked }))
             }
           />{' '}
-          🐞<span className="opt-label"> Prévia</span>
+          <span className="opt-label">Prévia</span>
         </label>
         <label title="Responder automaticamente às perguntas ouvidas. Desligado, só a pergunta manual consome tokens.">
           <input
@@ -1658,10 +2220,10 @@ function App() {
               } else setAnswerStatus('Ouvindo')
             }}
           />{' '}
-          🤖<span className="opt-label"> Auto</span>
+          <span className="opt-label">Auto</span>
         </label>
         <label title="Quantas respostas mostrar: a atual e até duas anteriores">
-          💬
+          <span className="opt-label">Respostas</span>
           <select
             className="answer-count-select"
             value={formData.answerCount}
@@ -1682,7 +2244,7 @@ function App() {
               setFormData((current) => ({ ...current, autoHeight: event.target.checked }))
             }
           />{' '}
-          ↕<span className="opt-label"> Altura</span>
+          <span className="opt-label">Altura</span>
         </label>
         <label title="Mostrar o campo para digitar uma pergunta ao copiloto">
           <input
@@ -1692,7 +2254,7 @@ function App() {
               setFormData((current) => ({ ...current, showManualQuestion: event.target.checked }))
             }
           />{' '}
-          ✍️<span className="opt-label"> Pergunta</span>
+          <span className="opt-label">Pergunta</span>
         </label>
       </div>
 
@@ -1735,7 +2297,6 @@ function App() {
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '1rem' }}>🎙️</span>
                 <h3
                   style={{
                     margin: 0,
@@ -1833,10 +2394,7 @@ function App() {
                     }
                   }}
                 >
-                  <span>🎙️</span>
-                  <span className="btn-label">
-                    {audioSource === 'MIC' ? 'Cancelar' : 'Perguntar'}
-                  </span>
+                  <span>{audioSource === 'MIC' ? 'Cancelar' : 'Perguntar'}</span>
                 </button>
               </div>
             </div>
@@ -1904,7 +2462,6 @@ function App() {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '1rem' }}>🧠</span>
               <div>
                 <h3
                   style={{
@@ -1963,7 +2520,7 @@ function App() {
                 title="Tempo até o primeiro texto / tempo total da resposta"
                 style={{ fontSize: '0.68rem', color: '#94a3b8' }}
               >
-                ⏱ {(aiLatency.firstTokenMs / 1000).toFixed(1)}s
+                Tempo {(aiLatency.firstTokenMs / 1000).toFixed(1)}s
                 {isAnswerStreaming ? ' …' : ` / ${(aiLatency.totalMs / 1000).toFixed(1)}s`}
               </span>
             )}
@@ -2007,7 +2564,7 @@ function App() {
               }}
               title="Responder de novo à última pergunta"
             >
-              ↻<span className="btn-label"> Repetir</span>
+              Repetir
             </button>
           </div>
           <div
@@ -2066,7 +2623,7 @@ function App() {
                 <>
                   {currentQuestion && (
                     <div className="answer-question" title={currentQuestion}>
-                      ❓ {currentQuestion}
+                      {currentQuestion}
                     </div>
                   )}
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{aiAnswer}</ReactMarkdown>
@@ -2117,7 +2674,7 @@ function App() {
                     </div>
                     {previous.question && (
                       <div className="answer-question" title={previous.question}>
-                        ❓ {previous.question}
+                        {previous.question}
                       </div>
                     )}
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{previous.answer}</ReactMarkdown>

@@ -66,18 +66,12 @@ npm run whisper:model
 
 ---
 
-### 🔑 Phase 5: Environment Variables
+### 🔑 Phase 5: AI Provider Keys
 
-Expose your cloud provider keys if you plan to use them. Copy and export these in your session terminal:
-
-```bash
-export GEMINI_API_KEY="your_google_gemini_api_key"
-export ANTHROPIC_API_KEY="your_anthropic_claude_api_key"
-export OPENAI_API_KEY="your_openai_chatgpt_api_key"
-```
+API keys are no longer read from environment variables. Start the app, open **Configurações** in the top bar and paste an OpenAI (`sk-…`), Anthropic (`sk-ant-…`) or Google Gemini (`AIza…`) key. The app recognises the provider, checks the key, lists its models and stores it encrypted with the system keychain.
 
 > [!NOTE]
-> If no API keys are provided or found in the environment, the copilot will automatically route all transcript payloads to the local **Ollama** instance.
+> To answer without any cloud provider, enable **Ollama** in the same window after running `ollama pull gemma2:2b`.
 
 ---
 

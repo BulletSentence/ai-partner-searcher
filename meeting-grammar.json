@@ -5,8 +5,8 @@
       "aliases": ["fidc ham", "fidc ram", "fidici ham", "fidici ram", "f i d c ham", "f i d c ram"]
     },
     {
-      "canonical": "Paketa",
-      "aliases": ["paketa", "paqueta", "paceta"]
+      "canonical": "Paketá",
+      "aliases": ["paketa", "paqueta", "paquetá", "paceta", "pacetá"]
     },
     {
       "canonical": "Rubicon 2",
@@ -98,7 +98,12 @@
     },
     {
       "canonical": "cessão de contratos",
-      "aliases": ["cessão de contratos", "sessão de contratos", "sessão dos contratos", "acessão dos contratos"]
+      "aliases": [
+        "cessão de contratos",
+        "sessão de contratos",
+        "sessão dos contratos",
+        "acessão dos contratos"
+      ]
     },
     {
       "canonical": "averbação",
@@ -106,7 +111,12 @@
     },
     {
       "canonical": "margem consignável",
-      "aliases": ["margem consignável", "margem consignavel", "margem disponível", "margem disponivel"]
+      "aliases": [
+        "margem consignável",
+        "margem consignavel",
+        "margem disponível",
+        "margem disponivel"
+      ]
     }
   ]
 }

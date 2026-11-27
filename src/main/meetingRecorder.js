@@ -1,6 +1,6 @@
 import { execFile } from 'child_process'
 import fs from 'fs'
-import { join } from 'path'
+import { basename, join } from 'path'
 
 const SAMPLE_RATE = 16_000
 const BYTES_PER_MS = (SAMPLE_RATE * 2) / 1000
@@ -245,6 +245,24 @@ export function createMeetingRecorder({ baseDir, meeting = {}, startedAt = new D
 }
 
 /** Lists saved meetings, newest first: one folder per meeting plus the older single-file format. */
+/**
+ * The file or folder of one saved meeting, given the name the history listed. Anything that is not
+ * an existing entry directly inside the meetings directory is refused.
+ */
+export async function resolveSavedMeetingPath(baseDir, filename) {
+  if (typeof filename !== 'string' || !filename || filename !== basename(filename)) return null
+  if (filename === '.' || filename === '..') return null
+  const path = join(baseDir, filename)
+  try {
+    const stat = await fs.promises.lstat(path)
+    if (stat.isSymbolicLink()) return null
+    if (stat.isDirectory() || (stat.isFile() && filename.endsWith('.json'))) return path
+  } catch {
+    // Already gone.
+  }
+  return null
+}
+
 export async function listSavedMeetings(baseDir) {
   let entries
   try {

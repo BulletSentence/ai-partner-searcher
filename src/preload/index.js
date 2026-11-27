@@ -5,18 +5,24 @@ import { electronAPI } from '@electron-toolkit/preload'
 const api = {
   exportFinalTranscript: (data) => ipcRenderer.invoke('export-final-transcript', data),
   isMac: process.platform === 'darwin',
-  onTranscription: (callback) => ipcRenderer.on('on-transcription', (_event, value) => callback(value)),
+  onTranscription: (callback) =>
+    ipcRenderer.on('on-transcription', (_event, value) => callback(value)),
   onTranscriptionPartial: (callback) =>
     ipcRenderer.on('on-transcription-partial', (_event, value) => callback(value)),
-  onMeetingSaved: (callback) => ipcRenderer.on('meeting-saved', (_event, folder) => callback(folder)),
+  onMeetingSaved: (callback) =>
+    ipcRenderer.on('meeting-saved', (_event, folder) => callback(folder)),
   openMeetingFolder: (folder) => ipcRenderer.send('open-meeting-folder', folder),
+  deleteMeeting: (filename) => ipcRenderer.invoke('delete-meeting', filename),
   generateFinalTranscript: (folder) => ipcRenderer.send('generate-final-transcript', folder),
   onFinalTranscriptStatus: (callback) =>
     ipcRenderer.on('final-transcript-status', (_event, status) => callback(status)),
   onAiAnswer: (callback) => ipcRenderer.on('on-ai-answer', (_event, value) => callback(value)),
-  onAiAnswerStart: (callback) => ipcRenderer.on('on-ai-answer-start', (_event, value) => callback(value)),
-  onAiAnswerDelta: (callback) => ipcRenderer.on('on-ai-answer-delta', (_event, value) => callback(value)),
-  onAiAnswerStatus: (callback) => ipcRenderer.on('on-ai-answer-status', (_event, value) => callback(value)),
+  onAiAnswerStart: (callback) =>
+    ipcRenderer.on('on-ai-answer-start', (_event, value) => callback(value)),
+  onAiAnswerDelta: (callback) =>
+    ipcRenderer.on('on-ai-answer-delta', (_event, value) => callback(value)),
+  onAiAnswerStatus: (callback) =>
+    ipcRenderer.on('on-ai-answer-status', (_event, value) => callback(value)),
   startMeeting: (data) => ipcRenderer.send('start-meeting', data),
   stopMeeting: () => ipcRenderer.send('stop-meeting'),
   askMeetingQuestion: (question) => ipcRenderer.send('ask-meeting-question', question),
@@ -29,6 +35,14 @@ const api = {
   close: () => ipcRenderer.send('close-window'),
   onWindowLockChange: (cb) => ipcRenderer.on('window-unlocked', (_e, val) => cb(val)),
   getContentProtection: () => ipcRenderer.invoke('get-content-protection'),
+  setContentProtection: (enabled) => ipcRenderer.invoke('set-content-protection', enabled),
+  getAiProviders: () => ipcRenderer.invoke('ai-providers:get'),
+  addAiProviderKey: (key) => ipcRenderer.invoke('ai-providers:add-key', key),
+  removeAiProvider: (id) => ipcRenderer.invoke('ai-providers:remove', id),
+  selectAgentModel: (provider, model) =>
+    ipcRenderer.invoke('ai-providers:select', { provider, model }),
+  refreshAiModels: (id) => ipcRenderer.invoke('ai-providers:refresh', id),
+  configureOllama: (options) => ipcRenderer.invoke('ai-providers:ollama', options),
   getDefaultMeetingProfile: () => ipcRenderer.invoke('get-default-meeting-profile'),
   getMeetingSettings: () => ipcRenderer.invoke('get-meeting-settings'),
   saveMeetingSettings: (settings) => ipcRenderer.invoke('save-meeting-settings', settings),
@@ -42,7 +56,8 @@ const api = {
   onAudioLevel: (cb) => ipcRenderer.on('audio-level', (_e, val) => cb(val)),
   onNativeAudioCaptureStart: (cb) => ipcRenderer.on('start-native-audio-capture', () => cb()),
   onNativeAudioCaptureStop: (cb) => ipcRenderer.on('stop-native-audio-capture', () => cb()),
-  sendNativeAudioChunk: (chunk, channel = 0) => ipcRenderer.send('native-audio-chunk', chunk, channel),
+  sendNativeAudioChunk: (chunk, channel = 0) =>
+    ipcRenderer.send('native-audio-chunk', chunk, channel),
   reportNativeAudioError: (message) => ipcRenderer.send('native-audio-capture-error', message),
   setWindowInteractive: () => ipcRenderer.send('set-window-interactive'),
   setWindowClickthrough: () => ipcRenderer.send('set-window-clickthrough'),
