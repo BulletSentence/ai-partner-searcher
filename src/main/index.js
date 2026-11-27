@@ -52,7 +52,8 @@ import { exportFinalTranscript } from './harnessExport'
 import { loadHarnessSearchConfig, searchHarness } from './harnessSearch'
 import { findRelevantContext, getIndexedChunks, indexKnowledgeSources } from './contextService'
 import { isLikelyQuestion } from './questionDetector'
-import { logRuntimeEvent } from './runtimeLogger'
+import { logRuntimeEvent, setLogsDirectory } from './runtimeLogger'
+import { resolveAppPaths } from './appPaths'
 import { getMeetingSettings, saveMeetingSettings } from './meetingSettings'
 import {
   configureTerminology,
@@ -119,7 +120,15 @@ function buildVocabularyPrompt(meetingContext, language) {
   })
 }
 
-const meetingsDirectory = process.env.MEETINGS_DIR || join(process.cwd(), 'meetings')
+const appPaths = resolveAppPaths({
+  isPackaged: app.isPackaged,
+  cwd: process.cwd(),
+  documentsDir: app.getPath('documents'),
+  logsDir: app.getPath('logs'),
+  env: process.env
+})
+const meetingsDirectory = appPaths.meetings
+setLogsDirectory(appPaths.logs)
 // A microphone utterance waits this long so a matching utterance from the call can expose it as speaker echo.
 const MIC_ECHO_HOLD_MS = 2_500
 const RECENT_UTTERANCES = 30
@@ -736,16 +745,48 @@ ipcMain.on('start-meeting', async (_event, data) => {
 
 // The renderer explicitly prepares local sources before capture begins, so startup
 // can report an actionable status without delaying audio capture unexpectedly.
+// Preparing the sources runs in short slices (see cooperative.js) so the window stays usable;
+// its progress goes to the loading screen and the user can cancel it.
+let knowledgeJob = null
+
 ipcMain.handle('prepare-knowledge-sources', async (_event, data) => {
   activeSourceFilter = 'all'
-  const status = await indexKnowledgeSources(data)
-  // Names in the notes become vocabulary for the transcription; this runs once, before the meeting.
-  const vocabulary = buildVocabulary(getIndexedChunks())
-  console.log(
-    `[Vocabulary] Learned ${vocabulary.terms} name(s) from the notes in ${vocabulary.ms} ms.`
-  )
-  return { ...status, vocabularyTerms: vocabulary.terms }
+  knowledgeJob?.abort()
+  const controller = new AbortController()
+  knowledgeJob = controller
+  let lastSent = 0
+  const report = (progress, force = false) => {
+    const now = Date.now()
+    if (!force && now - lastSent < 100) return
+    lastSent = now
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('knowledge-progress', progress)
+    }
+  }
+  try {
+    const status = await indexKnowledgeSources(data, {
+      signal: controller.signal,
+      onProgress: (progress) => report(progress)
+    })
+    // Names in the notes become vocabulary for the transcription; this runs once, before the meeting.
+    report({ phase: 'vocabulary', done: 0, total: 1 }, true)
+    const vocabulary = await buildVocabulary(getIndexedChunks(), {
+      signal: controller.signal,
+      onProgress: (done, total) => report({ phase: 'vocabulary', done, total })
+    })
+    console.log(
+      `[Vocabulary] Learned ${vocabulary.terms} name(s) from the notes in ${vocabulary.ms} ms.`
+    )
+    return { ...status, vocabularyTerms: vocabulary.terms }
+  } catch (error) {
+    if (error.name === 'AbortError') return { cancelled: true }
+    throw error
+  } finally {
+    if (knowledgeJob === controller) knowledgeJob = null
+  }
 })
+
+ipcMain.on('cancel-knowledge-sources', () => knowledgeJob?.abort())
 
 ipcMain.handle('get-audio-outputs', () => listAudioOutputs())
 ipcMain.handle('get-transcription-models', () => listTranscriptionModels())
@@ -925,6 +966,14 @@ app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.datawatch.app')
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(dockIcon)
   migrateLegacySettings()
+  // Created up front, so a folder that cannot be written shows up at startup and not mid-meeting.
+  try {
+    mkdirSync(meetingsDirectory, { recursive: true })
+    console.log(`[Paths] Meetings: ${meetingsDirectory} | Logs: ${appPaths.logs}`)
+  } catch (error) {
+    console.error(`[Paths] Cannot write meetings to ${meetingsDirectory}: ${error.message}`)
+    logRuntimeEvent('meetings_directory_unwritable', { message: error.message })
+  }
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

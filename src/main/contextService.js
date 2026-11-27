@@ -1,4 +1,5 @@
 import fs from 'fs/promises'
+import { createYielder } from './cooperative.js'
 import { basename, dirname, extname, resolve } from 'path'
 
 // Relative weight of a file type when ranking: notes explain, code implements, data files rarely answer.
@@ -97,6 +98,7 @@ function makeChunks(text, path, source) {
 }
 
 async function indexFile(filePath, output, source) {
+  await output.maybeYield()
   const extension = extname(filePath).toLowerCase()
   if (!(extension in extensionWeights) || ignoredFiles.test(basename(filePath))) return
   try {
@@ -105,7 +107,9 @@ async function indexFile(filePath, output, source) {
     const content = await fs.readFile(filePath, 'utf8')
     output.chunks.push(...makeChunks(content, filePath, source))
     output.files += 1
+    output.onFile?.()
   } catch (error) {
+    if (error.name === 'AbortError') throw error
     output.errors.push(`Não foi possível ler ${filePath}: ${error.message}`)
   }
 }
@@ -141,10 +145,16 @@ async function indexDirectory(directory, output, source) {
   }
 }
 
-function buildSearchIndex(chunks) {
+/** Builds the BM25 postings in slices, so the window keeps responding on a large vault. */
+async function buildSearchIndex(chunks, { maybeYield, onProgress }) {
   const nextPostings = new Map()
   let totalLength = 0
-  chunks.forEach((chunk, index) => {
+  for (let index = 0; index < chunks.length; index += 1) {
+    if (index % 200 === 0) {
+      onProgress?.(index, chunks.length)
+      await maybeYield()
+    }
+    const chunk = chunks[index]
     const frequencies = new Map()
     const terms = tokenize(chunk.content)
     for (const term of terms) frequencies.set(term, (frequencies.get(term) || 0) + 1)
@@ -155,20 +165,26 @@ function buildSearchIndex(chunks) {
       if (!list) nextPostings.set(term, (list = []))
       list.push(index, frequency)
     }
-  })
-  postings = nextPostings
-  averageLength = chunks.length ? totalLength / chunks.length : 1
+  }
+  onProgress?.(chunks.length, chunks.length)
+  return { postings: nextPostings, averageLength: chunks.length ? totalLength / chunks.length : 1 }
 }
 
 /**
  * Builds an in-memory index for the Obsidian vault and the local project folders.
  * No file content leaves the process at this stage.
  */
-export async function indexKnowledgeSources({ projectPaths = '', obsidianVaultPath = '', harnessPath = '' } = {}) {
+export async function indexKnowledgeSources(
+  { projectPaths = '', obsidianVaultPath = '', harnessPath = '' } = {},
+  { onProgress, signal } = {}
+) {
+  const maybeYield = createYielder(signal)
   // The vault goes first: it holds the curated answers, the projects hold the details.
   const locations = [
     ...new Set(
-      [obsidianVaultPath, harnessPath, ...projectPaths.split(/[\n,]/)].map((path) => path.trim()).filter(Boolean)
+      [obsidianVaultPath, harnessPath, ...projectPaths.split(/[\n,]/)]
+        .map((path) => path.trim())
+        .filter(Boolean)
     )
   ]
   const chunks = []
@@ -176,7 +192,14 @@ export async function indexKnowledgeSources({ projectPaths = '', obsidianVaultPa
   let files = 0
 
   for (const location of locations) {
-    const output = { files: 0, chunks: [], errors }
+    const output = {
+      files: 0,
+      chunks: [],
+      errors,
+      maybeYield,
+      onFile: () => onProgress?.({ phase: 'reading', files: files + output.files, location })
+    }
+    onProgress?.({ phase: 'reading', files, location })
     const resolvedLocation = resolve(location)
     try {
       const stat = await fs.lstat(resolvedLocation)
@@ -189,7 +212,8 @@ export async function indexKnowledgeSources({ projectPaths = '', obsidianVaultPa
       } else {
         errors.push(`Caminho não suportado: ${resolvedLocation}`)
       }
-    } catch {
+    } catch (error) {
+      if (error.name === 'AbortError') throw error
       errors.push(`Caminho não encontrado: ${resolvedLocation}`)
     }
     if (isBudgetSpent(output)) {
@@ -201,8 +225,14 @@ export async function indexKnowledgeSources({ projectPaths = '', obsidianVaultPa
     chunks.push(...output.chunks.slice(0, MAX_CHUNKS_PER_LOCATION))
   }
 
+  const built = await buildSearchIndex(chunks, {
+    maybeYield,
+    onProgress: (done, total) => onProgress?.({ phase: 'indexing', done, total })
+  })
+  // Swapped in together at the end: a search during the build still sees the previous, whole index.
   indexedChunks = chunks
-  buildSearchIndex(indexedChunks)
+  postings = built.postings
+  averageLength = built.averageLength
   indexStatus = { files, chunks: indexedChunks.length, locations, errors }
   console.log(`[Context] Indexed ${indexStatus.files} files into ${indexStatus.chunks} chunks.`)
   return indexStatus
