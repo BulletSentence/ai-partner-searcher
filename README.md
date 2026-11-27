@@ -116,7 +116,7 @@ npm run dev
 
 As reuniões gravadas aparecem em cartões no fim da tela inicial, quebrando linha conforme a largura da janela.
 
-- **Enviar para o Harness** copia a `transcricao-final.md` para a pasta do Harness escolhida. Quando dá certo, a reunião ganha a marca **Enviada ao Harness** (com data e caminho no tooltip), registrada no próprio `reuniao.json`: o app não precisa abrir a pasta do Harness para saber. O botão passa a se chamar **Enviar de novo** e cria um arquivo novo, sem sobrescrever o anterior.
+- **Enviar para o Harness** copia a `transcricao-final.md` para a pasta do Harness escolhida. O arquivo leva a data e a hora em que a reunião foi gravada no início do nome (por exemplo, `2026-11-27 09h30 - Daily - transcricao final.md`), então duas reuniões com o mesmo contexto nunca se sobrescrevem e as notas ficam em ordem cronológica. Quando dá certo, a reunião ganha a marca **Enviada ao Harness** (com data e caminho no tooltip), registrada no próprio `reuniao.json`: o app não precisa abrir a pasta do Harness para saber. O botão passa a se chamar **Enviar de novo** e cria um arquivo novo, sem sobrescrever o anterior.
 - **Apagar** pede confirmação e move a pasta inteira da reunião (áudio, transcrições e respostas) para a Lixeira do sistema, de onde ela pode ser recuperada. A reunião que está sendo gravada não pode ser apagada.
 
 ## O que fica salvo de cada reunião
